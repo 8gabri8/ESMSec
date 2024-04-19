@@ -4,4 +4,4 @@
 
 2.Unzip and modify the path to the file in the code
 
-3.run model.py
+3.run main.py
