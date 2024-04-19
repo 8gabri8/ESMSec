@@ -21,7 +21,7 @@ from datasets import Dataset, DatasetDict
 # 加载模型和 tokenizer
 from transformers import AdamW, AutoTokenizer, AutoModelForSequenceClassification
 
-checkpoint = "/home/wy/sunht/NLP/prot_bert"
+checkpoint = "ESM2"
 tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
