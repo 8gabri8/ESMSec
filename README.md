@@ -6,4 +6,4 @@
 
 3.run main.py
 
-Tip: In the data file, there are three processed human fluid data sets. When predicting secreted proteins, the training dataset and validation dataset of the training model are combined into a new training dataset for training the model, and the previous test dataset is used to adjust the parameters. Make predictions on datasets with the word "eval"
+Tip: In the data file, plasma data sets are provided. When predicting secreted proteins, the training data set of the training model and the validation data set are combined into a new training data set to train the model and the parameters are adjusted using the previous test data set. Make predictions on data sets with the word "eval"
