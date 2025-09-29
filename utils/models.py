@@ -66,17 +66,19 @@ class AttentionClassificationHead(nn.Module):
         ffnn_output = ffnn_out + out
         out = self.ffnn_layer_norm(ffnn_output)
 
-        # max and mean pooling --> compress over seqeence length dimesion
-        avg_pool = torch.mean(out, dim=1) # Shape: [batch_size, hidden_dim]
-        max_pool, _ = torch.max(out, dim=1)  
+        # store emb to access later if needed
+        self.avg_pool = torch.mean(out, dim=1)      # [batch, hidden]
+        self.max_pool, _ = torch.max(out, dim=1)    # [batch, hidden]
+        self.cls_repr = out[:, 0, :]                # take CLS token before pooling [batch, hidden]
 
-        #Cocnat  [batch, 2*hidden]
-        out = torch.cat((avg_pool, max_pool), dim=1)  
+        # concatenate
+        concat_out = torch.cat((self.avg_pool, self.max_pool), dim=1)  # [batch, 2*hidden]
+        self.concat_repr = concat_out
 
-        # Classification layers FFNN
-        out = self.classifier(out) #[batch_size, 2]
+        # classifier
+        logits = self.classifier(concat_out)        # [batch, 2]
 
-        return out
+        return logits
     
 
 # Define Model (ESM+ClassificatioHead)
@@ -107,8 +109,32 @@ class EsmDeepSec(nn.Module):
             #hidden_states
             #attentions
 
-        last_hidden_state = outputs.last_hidden_state # Shape: [batch, seq_len (with special tokens), hidden_dim]
+        self.esm_last_hidden_state = outputs.last_hidden_state # Shape: [batch, seq_len (with special tokens), hidden_dim]
 
-        features = self.feature_fn(last_hidden_state) #[batch_size, 2]
+        features = self.feature_fn(self.esm_last_hidden_state) #[batch_size, 2]
 
         return features
+
+
+
+
+
+from torch.utils.data import Dataset
+
+class ProteinDataset(Dataset):
+    def __init__(self, input_ids, attention_mask, labels, names):
+        self.input_ids = input_ids
+        self.attention_mask = attention_mask
+        self.labels = labels
+        self.names = names  # can be strings
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return (
+            self.input_ids[idx],
+            self.attention_mask[idx],
+            self.labels[idx],
+            self.names[idx],
+        )
