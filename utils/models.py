@@ -7,24 +7,20 @@ from typing import List
 
 # Classification Head
 class AttentionClassificationHead(nn.Module):
-    def __init__(self, in_features: int = 480) -> None:
-        super(AttentionClassificationHead, self).__init__()  # 调用父类的初始化方法
 
+    def __init__(self, in_features: int = 480) -> None:
+        super(AttentionClassificationHead, self).__init__() 
 
         self.in_features = in_features
 
-
-        # 创建注意力层
+        # initialise multi-head attention layer
+        # ATTENTION: in_features % num_heads != 0 → crash.
         self.attention_layer = nn.MultiheadAttention(embed_dim=in_features, num_heads=8)  
 
-        # 创建全连接层
-        self.fc_linear1 = nn.Linear(2*in_features, 1280)  
-        self.fc_linear2 = nn.Linear(1280, 628)
-        self.fc_linear3 = nn.Linear(628, 32)
-        self.fc_linear4 = nn.Linear(32, 2)
-        # 添加残差连接和归一化层
+        # initialize layer normalization layers
         self.layer_norm = nn.LayerNorm(in_features)
 
+        # initialize feed-forward neural network
         self.ffnn = nn.Sequential(
             nn.Linear(in_features, in_features*4),
             nn.GELU(),
@@ -32,37 +28,53 @@ class AttentionClassificationHead(nn.Module):
             nn.Dropout(0.3),
         )
 
-     
-
+        # initialize layer normalization for ffnn
         self.ffnn_layer_norm = nn.LayerNorm(in_features)
+
+        # initialize classification layers
+        self.classifier = nn.Sequential(
+            nn.Linear(2*in_features, 1280), # 2*in_features because of pooling concatenation
+            nn.ReLU(),
+            nn.Linear(1280, 628),
+            nn.ReLU(),
+            nn.Linear(628, 32),
+            nn.ReLU(),
+            nn.Linear(32, 2), # 2 for binary classication
+        )
+    
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
+        # permute: [batch_size, seq_len, hidden_dim] --> [seq_len, batch, hidden_dim] (needed by attention layer)
         input_tensor = x.permute(1, 0, 2)
 
-        
+        # compute SELF attention (Q,K,V are all the same)
         output_tensor, _ = self.attention_layer(input_tensor, input_tensor, input_tensor)
+
+        # return to original shape
         out = output_tensor.permute(1, 0, 2)
+
+        # Skip connections (the block only needs to learn the residual change to apply, not totally new rep)
         residual_output = x + out
+        # layer normalization: center the emb of each residue using the values of THAT residue
         out = self.layer_norm(residual_output)
+
+        # Run FFNN (mix info PER token)
         ffnn_out = self.ffnn(out)
 
-       
-        ffnn_output = ffnn_out +out
+        # Skip connection + layer normalization
+        ffnn_output = ffnn_out + out
         out = self.ffnn_layer_norm(ffnn_output)
 
-       
-        avg_pool = torch.mean(out, dim=1) 
-
-       
+        # max and mean pooling --> compress over seqeence length dimesion
+        avg_pool = torch.mean(out, dim=1) # Shape: [batch_size, hidden_dim]
         max_pool, _ = torch.max(out, dim=1)  
+
+        #Cocnat  [batch, 2*hidden]
         out = torch.cat((avg_pool, max_pool), dim=1)  
 
-       
-        out = F.relu(self.fc_linear1(out))
-        out = F.relu(self.fc_linear2(out))
-        out = F.relu(self.fc_linear3(out))
-        out = self.fc_linear4(out)
+        # Classification layers FFNN
+        out = self.classifier(out) #[batch_size, 2]
 
         return out
     
@@ -83,11 +95,20 @@ class EsmDeepSec(nn.Module):
 
 
     def forward(self, input_ids, attention_mask=None):
-        with torch.no_grad(): # Freeze ESM2 parameters
+
+        with torch.no_grad(): # Avoid compute gradient on mpdel part that will not be trained
             outputs = self.esm_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+            # retrun Dict obj: https://huggingface.co/docs/transformers/en/model_doc/esm#transformers.EsmModel
+            # the attributes diepedns on:
+                # 1)whcih model has be instationed with AutoModel when ESM was created
+                # 2) the cinfug used to initialise ESM model
+            #last_hidden_state --> contextalised emb of aa (all tokenes)
+            #pooler_output --> emb of the whole sequence (CLS token) AFTER PASSING IN A MLP
+            #hidden_states
+            #attentions
 
         last_hidden_state = outputs.last_hidden_state # Shape: [batch, seq_len (with special tokens), hidden_dim]
 
-        features = self.feature_fn(last_hidden_state)
+        features = self.feature_fn(last_hidden_state) #[batch_size, 2]
 
         return features
