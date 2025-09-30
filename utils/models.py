@@ -115,26 +115,3 @@ class EsmDeepSec(nn.Module):
 
         return features
 
-
-
-
-
-from torch.utils.data import Dataset
-
-class ProteinDataset(Dataset):
-    def __init__(self, input_ids, attention_mask, labels, names):
-        self.input_ids = input_ids
-        self.attention_mask = attention_mask
-        self.labels = labels
-        self.names = names  # can be strings
-
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        return (
-            self.input_ids[idx],
-            self.attention_mask[idx],
-            self.labels[idx],
-            self.names[idx],
-        )
