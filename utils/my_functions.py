@@ -15,6 +15,8 @@ from scipy.ndimage import gaussian_filter1d
 import matplotlib.patches as mpatches
 import warnings
 from tqdm import tqdm
+from tqdm import tqdm_notebook as tqdm
+
 
 import dataset as my_dataset
 
@@ -88,7 +90,10 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
         loss_fn = nn.CrossEntropyLoss()
 
     with torch.no_grad():
-        for seq, attention_mask, label, _ in dl:
+        for batch in tqdm(dl, desc=f"Evaluation", unit=f" {split_name} batch", leave=False):
+
+            seq, attention_mask, label, _ = batch
+
             seq, attention_mask, label = seq.to(device), attention_mask.to(device), label.to(device)
 
             output = net(seq, attention_mask=attention_mask)
@@ -189,16 +194,15 @@ def train(net, train_dl, valid_dl, test_dl, config):
     # Set model to training mode
     net.train()
 
-    # Initialize progress bar for total iterations
-    pbar = trange(1, num_epochs + 1, desc="Training", unit="iter") #tqdm(range(...))
-    epoch_idx = 1
 
-
-    for epoch_idx in pbar:
+    for epoch_idx in trange(1, num_epochs + 1, desc="Training", unit="epoch"):
 
         net.train() # back to train mode
 
-        for [seq, attention_mask, label, _] in train_dl: # take one BATCH
+        for batch in tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit=" train batch", leave=False):
+            
+            # unpack
+            seq, attention_mask, label, _ = batch
 
             # set model to trainign mode
             net.train()
@@ -363,7 +367,10 @@ def extract_embeddings(net, dl, device, which=None, cls_index=0, return_numpy=Tr
     labels_list = []
     preds_list = []
 
-    for seq, attention_mask, label, names in dl:
+    for batch in tqdm(dl, desc=f"Batch", unit=" train batch", leave=False):
+    
+        # unpack
+        seq, attention_mask, label, names = batch
 
         #move to device
         seq, attention_mask, label = seq.to(device), attention_mask.to(device), label.to(device)      
