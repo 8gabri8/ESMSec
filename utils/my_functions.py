@@ -124,13 +124,11 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
     labels_np = all_labels.numpy()
     preds_np = all_preds.numpy()
 
-    # Calculate additional metrics
+    ### Calculate additional metrics
     # F1 Score (binary or weighted for multiclass)
     f1 = f1_score(labels_np, preds_np, average='binary' if len(torch.unique(all_labels)) == 2 else 'weighted', zero_division=0)
-    
     # Balanced Accuracy
     balanced_acc = balanced_accuracy_score(labels_np, preds_np)
-    
     # Matthews Correlation Coefficient
     mcc = matthews_corrcoef(labels_np, preds_np)
 
