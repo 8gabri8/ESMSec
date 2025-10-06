@@ -185,7 +185,7 @@ def train(net, train_dl, valid_dl, test_dl, config):
     eval_epoch_freq = config["EVAL_EPOCH_FREQ"]
 
     # Initialise obj
-    optimizer = AdamW(net.feature_fn.parameters(), lr=lr) # ONLY train the classification head
+    optimizer = AdamW(net.class_head.parameters(), lr=lr) # ONLY train the classification head
     exp_lr = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # step_size=N → the LR changes after step() has been called N times
     loss_fn = nn.CrossEntropyLoss() # binary classfication, needs logits
 
@@ -398,16 +398,16 @@ def extract_embeddings(net, dl, device, which=None, cls_index=0, return_numpy=Tr
             if "esm_tokens" in which:
                 buffers["esm_tokens"].append(esm_last_hidden_state.detach().cpu())  # [B, L, H]
 
-        # --- feature_fn embeddings ---
+        # --- class_head embeddings ---
         if any(k.startswith("feature_") for k in which):
             if "feature_mean" in which:
-                buffers["feature_mean"].append(net.feature_fn.avg_pool.detach().cpu())
+                buffers["feature_mean"].append(net.class_head.avg_pool.detach().cpu())
             if "feature_max" in which:
-                buffers["feature_max"].append(net.feature_fn.max_pool.detach().cpu())
+                buffers["feature_max"].append(net.class_head.max_pool.detach().cpu())
             if "feature_cls" in which:
-                buffers["feature_cls"].append(net.feature_fn.cls_repr.detach().cpu())
+                buffers["feature_cls"].append(net.class_head.cls_repr.detach().cpu())
             if "feature_concat" in which:
-                buffers["feature_concat"].append(net.feature_fn.concat_repr.detach().cpu())
+                buffers["feature_concat"].append(net.class_head.concat_repr.detach().cpu())
 
     results = {}
     for k, list_of_tensors in buffers.items():
