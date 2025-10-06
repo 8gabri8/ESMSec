@@ -329,86 +329,72 @@ def summarize_training(
 
 
 @torch.no_grad()
-def extract_embeddings(net, dl, device, which=None, cls_index=0, return_numpy=True):
-
+def extract_embeddings(net, dl, device, cls_index=0, return_numpy=True):
     """
     Extract embeddings from a trained EsmDeepSec model.
 
     Args:
         net: EsmDeepSec instance (already loaded with weights).
-        dl: yields (input_ids, attention_mask, label) or (input_ids, attention_mask).
+        dl: yields (input_ids, attention_mask, label, names).
         device: torch.device
-        which: list of strings specifying embeddings to return. See doc above for allowed keys.
         cls_index: token index to use as CLS if pooler_output not available (default 0).
         return_numpy: if True, returned tensors are numpy arrays on CPU; otherwise torch tensors on CPU.
 
     Returns:
-        dict:
-            'embeddings': dict mapping requested key -> stacked embeddings (N x D)
-            'names': list of protein names
-            'labels': np.array of true labels
-            'preds': np.array of predicted labels (or None if not available)
+        tuple:
+            results: dict mapping embedding key -> stacked embeddings (N x D)
+            names_list: list of protein names
+            labels_array: np.array of true labels
+            preds_array: np.array of predicted labels
     """
-
-    if which is None:
-        which = [
-            "esm_mean", "esm_max", "esm_cls",
-            "feature_mean", "feature_max", "feature_cls", "feature_concat"
-        ]
 
     net.eval()
     net = net.to(device)
 
-    # storage: lists where we append CPU tensors
-    buffers = {k: [] for k in which}
+    # storage: will be initialized dynamically based on what the model returns
+    buffers = None
     names_list = []
     labels_list = []
     preds_list = []
 
-    for batch in tqdm(dl, desc=f"Batch", unit=" train batch", leave=False):
+    for batch in tqdm(dl, desc=f"Batch", unit=" batch", leave=False):
     
         # unpack
         seq, attention_mask, label, names = batch
 
-        #move to device
+        # move to device
         seq, attention_mask, label = seq.to(device), attention_mask.to(device), label.to(device)      
 
-        # Forward apss
-        logits = net(seq, attention_mask=attention_mask) 
+        # Forward pass with return_embs=True
+        logits, embs = net(seq, attention_mask=attention_mask, return_embs=True) 
+        
         probs = torch.softmax(logits, dim=-1)
         preds = torch.argmax(probs, dim=-1)
 
-        # add info to lists
+        # Flatten nested dicts (e.g., class_head_embs might be a dict)
+        flat_embs = {}
+        for k, v in embs.items():
+            if isinstance(v, dict):
+                # If value is a dict, flatten it with prefixed keys
+                for sub_k, sub_v in v.items():
+                    flat_embs[f"{k}_{sub_k}"] = sub_v
+            else:
+                flat_embs[k] = v
+        
+        # Initialize buffers on first batch based on what model actually returns
+        if buffers is None:
+            buffers = {k: [] for k in flat_embs.keys()}
+        
+        # Store embeddings (move to CPU)
+        for k, v in flat_embs.items():
+            buffers[k].append(v.cpu())
+        
+        # Store names, labels, predictions
         names_list.extend(names)
-        labels_list.extend(label.detach().cpu().numpy())
-        preds_list.extend(preds.detach().cpu().numpy())
+        labels_list.extend(label.cpu().tolist())
+        preds_list.extend(preds.cpu().tolist())
 
-        # final contectualised embs
-        esm_last_hidden_state = net.esm_last_hidden_state  # [B, L, H]
-
-        # --- ESM-level embeddings ---
-        if any(k.startswith("esm_") for k in which):
-            if "esm_mean" in which:
-                buffers["esm_mean"].append(esm_last_hidden_state.mean(dim=1).detach().cpu())
-            if "esm_max" in which:
-                esm_max, _ = esm_last_hidden_state.max(dim=1)
-                buffers["esm_max"].append(esm_max.detach().cpu())
-            if "esm_cls" in which:
-                buffers["esm_cls"].append(esm_last_hidden_state[:, cls_index, :].detach().cpu())
-            if "esm_tokens" in which:
-                buffers["esm_tokens"].append(esm_last_hidden_state.detach().cpu())  # [B, L, H]
-
-        # --- class_head embeddings ---
-        if any(k.startswith("feature_") for k in which):
-            if "feature_mean" in which:
-                buffers["feature_mean"].append(net.class_head.avg_pool.detach().cpu())
-            if "feature_max" in which:
-                buffers["feature_max"].append(net.class_head.max_pool.detach().cpu())
-            if "feature_cls" in which:
-                buffers["feature_cls"].append(net.class_head.cls_repr.detach().cpu())
-            if "feature_concat" in which:
-                buffers["feature_concat"].append(net.class_head.concat_repr.detach().cpu())
-
+    # Concatenate all batches
     results = {}
     for k, list_of_tensors in buffers.items():
         if len(list_of_tensors) == 0:
@@ -420,7 +406,7 @@ def extract_embeddings(net, dl, device, which=None, cls_index=0, return_numpy=Tr
     return results, names_list, np.array(labels_list), np.array(preds_list)
 
 
-def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_state=42):
+def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_state=None):
     """
     Compute 2D UMAP projections for each embedding type and return as tensors.
 
@@ -437,10 +423,16 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
 
     for key, emb in embeddings_dict.items():
         print(f"Computing UMAP for {key} with shape {emb.shape if emb is not None else None}...")
-        if emb is None or emb.shape[1] < 2:
-            continue  # skip embeddings with fewer than 2 dimensions
-
-        emb_2d = umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=random_state).fit_transform(emb)
+        
+        # Convert numpy to tensor if needed
+        if isinstance(emb, np.ndarray):
+            emb = torch.from_numpy(emb)
+        
+        emb_2d = umap.UMAP(n_neighbors=n_neighbors, 
+                           min_dist=min_dist, 
+                           random_state=random_state, 
+                           n_jobs=-1 #Prioritize speed with parallelism, sacrifice exact reproducibility
+                           ).fit_transform(emb)
         umap_tensors[key] = torch.tensor(emb_2d, dtype=torch.float32)
 
     return umap_tensors
@@ -474,13 +466,16 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     # Build DataFrames for each embedding type
     dfs = {}
     for key in embedding_keys:
+        if key not in umap_embs:
+            continue
         emb = umap_embs[key]
         if emb is None:
             continue
-        if hasattr(emb, "numpy"):
-            emb_np = emb.numpy()
+        if isinstance(emb, torch.Tensor):
+            emb_np = emb.cpu().numpy() if emb.is_cuda else emb.numpy()
         else:
-            emb_np = emb
+            emb_np = np.array(emb)
+        
         df = pd.DataFrame({
             'Name': names,
             'UMAP1': emb_np[:, 0],
@@ -502,13 +497,13 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
         # Row 0: True labels
         sns.scatterplot(x='UMAP1', y='UMAP2', hue='TrueClass', palette=class_palette,
                         data=df, alpha=0.8, s=50, ax=axes[0, col_idx], legend=False)
-        axes[0, col_idx].set_title(f"{key.capitalize()} - True Labels")
+        axes[0, col_idx].set_title(f"{key.replace('_', ' ').title()} - True Labels")
         axes[0, col_idx].grid(True, alpha=0.3)
 
         # Row 1: Predicted labels
         sns.scatterplot(x='UMAP1', y='UMAP2', hue='PredClass', palette=class_palette,
                         data=df, alpha=0.8, s=50, ax=axes[1, col_idx], legend=False)
-        axes[1, col_idx].set_title(f"{key.capitalize()} - Predicted Labels")
+        axes[1, col_idx].set_title(f"{key.replace('_', ' ').title()} - Predicted Labels")
         axes[1, col_idx].grid(True, alpha=0.3)
 
         # Row 2: Correct vs Wrong
@@ -519,7 +514,7 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
                                  c=corr_palette['correct'], alpha=0.6, s=40, label='correct', edgecolor='none')
         axes[2, col_idx].scatter(df_wrong['UMAP1'], df_wrong['UMAP2'],
                                  c=corr_palette['wrong'], alpha=0.9, s=90, label='wrong', edgecolor='k', linewidth=0.4)
-        axes[2, col_idx].set_title(f"{key.capitalize()} - Correct vs Wrong")
+        axes[2, col_idx].set_title(f"{key.replace('_', ' ').title()} - Correct vs Wrong")
         axes[2, col_idx].set_xlabel("UMAP 1")
         axes[2, col_idx].set_ylabel("UMAP 2")
         axes[2, col_idx].grid(True, alpha=0.3)
@@ -534,7 +529,7 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     plt.tight_layout(rect=[0, 0, 0.95, 1])
     plt.show()
 
-    return df
+    return dfs
 
 ############################################################################################################################
 ### A-SCANNING
@@ -847,6 +842,400 @@ def plot_alanine_scan(delta_p, sequence, sigma=3, threshold=True, figsize=(20, 6
     print(f"{'='*70}\n")
 
 
+def multi_aa_scanning(model, tokenizer, 
+                      single_protein_info, 
+                      window_size: int = 3, 
+                      substitute_aas=["A", "R", "E", "F"],
+                      normalise_true_substitution=False,
+                      device="cuda"):
+    """
+    Perform scanning by replacing a window of residues with multiple amino acids.
+    For each position, substitutes with each amino acid in substitute_aas and averages the results.
+    Window_size should be odd (so there is a center residue).
+    Returns baseline probability and delta probabilities mapped to positions.
+
+    Args:
+        model: Trained model
+        tokenizer: Tokenizer instance
+        single_protein_info: Series containing single protein data
+        window_size: Size of mutation window (must be odd)
+        device: Device to run inference on
+        substitute_aas: List of amino acids to substitute (default: ["A", "R", "E", "F"])
+        normalise_true_substitution: Whether to normalize by number of true substitutions
+    
+    Returns:
+        dict: Contains baseline_prob, delta_probs, mutated_probs, and per_aa_results
+    """
+    assert window_size % 2 == 1, "window_size must be odd"
 
 
+    ### CALCULATE BASELINE PROB ###
+
+    # Create a temporary dataframe with the single protein
+    temp_df = pd.DataFrame([single_protein_info])
+
+    # Create dataloader for single protein
+    single_protein_dl = my_dataset.create_dataloader(
+        temp_df, 
+        set_name=single_protein_info['set'], 
+        batch_size=1, 
+        shuffle=False
+    )
+
+    # Calculate baseline prob
+    with warnings.catch_warnings(): 
+        warnings.simplefilter("ignore", category=UserWarning)
+        baseline_dict = evaluate_model(model, single_protein_dl, device, split_name="Single protein", verbose=False)
+    baseline_p = baseline_dict["probs_class1"][0].item() 
+
+
+    ### GENERATE ALL MUTATED SEQUENCES FOR ALL AMINO ACIDS ###
+    
+    # Sequence to mutate (use TRUNCATED sequence)
+    seq_list = list(single_protein_info['trunc_sequence'])
+    trunc_len = len(seq_list)
+
+    mutated_sequences = []
+    mutation_info = []  # Store info about each mutation (position, AA used)
+
+    # Iterate through each position and each substitute amino acid
+    for i in tqdm(range(trunc_len), desc="Generating mutations"):
+
+        # Define window boundaries
+        half_w = window_size // 2
+        start = max(0, i - half_w)
+        end = min(trunc_len, i + half_w + 1)
+
+        # For each position, create mutations with each substitute amino acid
+        for sub_aa in substitute_aas:
+            true_sub_count = 0
+            
+            # Create mutated sequence
+            mutated_seq_list = seq_list.copy()
+            for j in range(start, end):
+                if seq_list[j] != sub_aa:  # Count true substitutions
+                    true_sub_count += 1
+                mutated_seq_list[j] = sub_aa
+            
+            mutated_sequences.append(''.join(mutated_seq_list))
+            mutation_info.append({
+                'position': i,
+                'substitute_aa': sub_aa,
+                'true_sub_count': true_sub_count
+            })
+
+
+    ### PREPROCESS ALL MUTATED PROTEINS ###
+
+    # Create a list of processed data dictionaries for all mutations
+    all_mutated_data = []
+    
+    # Preprocess all sequences
+    for mutated_seq in tqdm(mutated_sequences, desc="Preprocessing mutations"):
+
+        mutated_data = my_dataset.preprocess_sequence(
+            sequence=mutated_seq,
+            label=single_protein_info['label'],
+            protein_name=single_protein_info['protein'],
+            tokenizer=tokenizer,
+            protein_max_length=single_protein_info['inputs_ids_length']
+        )
+        mutated_data['set'] = single_protein_info['set']
+        all_mutated_data.append(mutated_data)
+
+    # Create one DataFrame from all processed data
+    mutated_df = pd.DataFrame(all_mutated_data)
+
+    # Create one DataLoader for ALL mutated sequences
+    # Calculate appropriate batch size
+    total_mutations = len(mutated_sequences)
+    batch_size = max(1, int(total_mutations // 100))
+    
+    mutated_dl = my_dataset.create_dataloader(
+        mutated_df,
+        set_name=single_protein_info['set'],
+        batch_size=batch_size,         
+        shuffle=False
+    )
+
+    ### CALCULATE PROBS FOR ALL MUTATED PROTEINS ###
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        print("Evaluating model on mutated sequences...")
+        mutated_dict = evaluate_model(model, mutated_dl, device, split_name="Multi-AA Scan", verbose=False)
+    
+    # The result is a tensor of probabilities
+    mutated_probs = mutated_dict["probs_class1"].cpu().numpy()
+
+
+    ### CALCULATE DELTAS AND AVERAGE ACROSS AMINO ACIDS ###
+    
+    delta_p_all = mutated_probs - baseline_p
+    
+    # Organize results by position and amino acid
+    n_positions = trunc_len
+    n_aas = len(substitute_aas)
+    
+    # Reshape to [positions, amino_acids]
+    delta_p_reshaped = delta_p_all.reshape(n_positions, n_aas)
+    mutated_probs_reshaped = mutated_probs.reshape(n_positions, n_aas)
+    
+    # Store per-AA results for detailed analysis
+    per_aa_results = {}
+    for aa_idx, aa in enumerate(substitute_aas):
+        per_aa_results[aa] = {
+            'delta_probs': delta_p_reshaped[:, aa_idx],
+            'mutated_probs': mutated_probs_reshaped[:, aa_idx]
+        }
+    
+    # Calculate mean across amino acids for each position
+    delta_p_mean = np.mean(delta_p_reshaped, axis=1)
+    mutated_probs_mean = np.mean(mutated_probs_reshaped, axis=1)
+    
+    # Optional normalization by true substitution count
+    if normalise_true_substitution:
+        # Calculate mean true substitution count per position
+        true_sub_counts = np.array([info['true_sub_count'] for info in mutation_info])
+        true_sub_counts_reshaped = true_sub_counts.reshape(n_positions, n_aas)
+        mean_true_sub_counts = np.mean(true_sub_counts_reshaped, axis=1)
+        
+        delta_p_mean = np.where(mean_true_sub_counts > 0, 
+                                delta_p_mean / mean_true_sub_counts, 
+                                0.0)
+
+    return {
+        'baseline_prob': baseline_p,
+        'delta_probs': delta_p_mean,  # Mean across all substitute AAs
+        'mutated_probs': mutated_probs_mean,  # Mean across all substitute AAs
+        'per_aa_results': per_aa_results,  # Individual results per amino acid
+        'sequence': single_protein_info['trunc_sequence'],
+        'protein_name': single_protein_info['protein'],
+        'substitute_aas': substitute_aas
+    }
+
+
+def plot_multi_aa_scan(scan_results, sigma=3, threshold=True, figsize=(20, 6), 
+                       highlight_residues=True, top_n=10, show_sequence=True,
+                       style='darkgrid', palette='RdBu_r', show_per_aa=False):
+    """
+    Plot the Δp values across the protein sequence from multi-AA scanning results
+    with optional smoothing, threshold lines, and residue highlighting.
+
+    Args:
+        scan_results: Dictionary output from multi_aa_scanning() function containing:
+                     - 'delta_probs': Mean delta probabilities
+                     - 'sequence': Protein sequence
+                     - 'protein_name': Protein identifier
+                     - 'per_aa_results': Individual results per amino acid
+                     - 'substitute_aas': List of amino acids used
+        sigma: Gaussian smoothing width (residues) for smoothing curve.
+        threshold: whether to plot threshold lines (mean ± 2*std).
+        figsize: tuple for figure size.
+        highlight_residues: whether to annotate top important residues.
+        top_n: number of top residues to highlight (both positive and negative).
+        show_sequence: whether to show amino acid letters on x-axis (only for short sequences).
+        style: seaborn style ('darkgrid', 'whitegrid', 'dark', 'white', 'ticks').
+        palette: color palette for gradient coloring.
+        show_per_aa: whether to show individual amino acid traces.
+    """
+    # Extract data from scan_results
+    delta_p = scan_results['delta_probs']
+    sequence = scan_results['sequence']
+    protein_name = scan_results['protein_name']
+    per_aa_results = scan_results.get('per_aa_results', {})
+    substitute_aas = scan_results.get('substitute_aas', [])
+    baseline_prob = scan_results['baseline_prob']
+    
+    # Set seaborn style
+    sns.set_style(style)
+    sns.set_context("notebook", font_scale=1.1)
+    
+    positions = np.arange(1, len(sequence) + 1)
+    delta_p = np.array(delta_p)
+    
+    # Smoothed signal
+    smooth_delta = gaussian_filter1d(delta_p, sigma=sigma)
+    
+    # Statistics
+    mu = np.mean(delta_p)
+    std = np.std(delta_p)
+    cutoff = 2 * std
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Create color map based on delta_p values
+    max_abs_delta = np.max(np.abs(delta_p))
+    norm = plt.Normalize(vmin=-max_abs_delta, vmax=max_abs_delta)
+    colors = plt.cm.RdBu_r(norm(delta_p))
+    
+    # Plot bars with gradient coloring
+    bars = ax.bar(positions, delta_p, color=colors, alpha=0.6, 
+                  edgecolor='black', linewidth=0.5, 
+                  label=f"Mean Δp (across {', '.join(substitute_aas)})")
+    
+    # Plot individual amino acid traces if requested
+    if show_per_aa and per_aa_results:
+        aa_colors = {'A': '#ff7f0e', 'R': '#2ca02c', 'E': '#d62728', 'F': '#9467bd'}
+        for aa in substitute_aas:
+            if aa in per_aa_results:
+                aa_delta = per_aa_results[aa]['delta_probs']
+                ax.plot(positions, aa_delta, 
+                       color=aa_colors.get(aa, 'gray'), 
+                       linewidth=1.5, alpha=0.4, 
+                       label=f"Δp ({aa})", linestyle='--')
+    
+    # Plot smoothed curve
+    ax.plot(positions, smooth_delta, color="black", linewidth=3, 
+            label=f"Smoothed (σ={sigma})", zorder=5, alpha=0.8)
+    
+    # Add threshold lines
+    if threshold:
+        ax.axhline(y=mu + cutoff, color="#2ecc71", linestyle="--", linewidth=2, 
+                   label=f"+2σ = {mu + cutoff:.3f}", alpha=0.8)
+        ax.axhline(y=mu - cutoff, color="#e74c3c", linestyle="--", linewidth=2, 
+                   label=f"-2σ = {mu - cutoff:.3f}", alpha=0.8)
+        ax.axhline(y=mu, color="#95a5a6", linestyle=":", linewidth=1.5, 
+                   label=f"Mean = {mu:.3f}", alpha=0.7)
+    
+    # Highlight important residues
+    if highlight_residues and top_n > 0:
+        # Most negative deltas (most important for positive class)
+        neg_indices = np.argsort(delta_p)[:top_n]
+        for idx in neg_indices:
+            if delta_p[idx] < (mu - cutoff):
+                ax.annotate(f'{sequence[idx]}{idx+1}', 
+                           xy=(positions[idx], delta_p[idx]),
+                           xytext=(0, -20), textcoords='offset points',
+                           ha='center', fontsize=9, color='white', weight='bold',
+                           bbox=dict(boxstyle='round,pad=0.4', 
+                                    facecolor='#e74c3c', 
+                                    edgecolor='darkred',
+                                    alpha=0.9, linewidth=2),
+                           arrowprops=dict(arrowstyle='->', 
+                                         color='darkred', 
+                                         lw=1.5,
+                                         connectionstyle='arc3,rad=0'))
+        
+        # Most positive deltas (stabilizing residues)
+        pos_indices = np.argsort(delta_p)[-top_n:]
+        for idx in pos_indices:
+            if delta_p[idx] > (mu + cutoff):
+                ax.annotate(f'{sequence[idx]}{idx+1}', 
+                           xy=(positions[idx], delta_p[idx]),
+                           xytext=(0, 20), textcoords='offset points',
+                           ha='center', fontsize=9, color='white', weight='bold',
+                           bbox=dict(boxstyle='round,pad=0.4', 
+                                    facecolor='#3498db', 
+                                    edgecolor='darkblue',
+                                    alpha=0.9, linewidth=2),
+                           arrowprops=dict(arrowstyle='->', 
+                                         color='darkblue', 
+                                         lw=1.5,
+                                         connectionstyle='arc3,rad=0'))
+    
+    # Labels and styling
+    ax.set_xlabel("Residue Position", fontsize=13, fontweight='bold')
+    ax.set_ylabel("Δp (Change in Probability)", fontsize=13, fontweight='bold')
+    ax.set_title(f"Multi-AA Scanning Importance Map - {protein_name}\n" + 
+                 f"Negative Δp = Critical for function | Baseline prob: {baseline_prob:.4f}", 
+                 fontsize=15, fontweight='bold', pad=20)
+    
+    # Show sequence on x-axis if short enough
+    if show_sequence and len(sequence) <= 50:
+        ax.set_xticks(positions)
+        ax.set_xticklabels(list(sequence), fontsize=9, family='monospace')
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0)
+    else:
+        ax.set_xlim(0, len(sequence) + 1)
+    
+    # Legend
+    ax.legend(loc='upper right', fontsize=10, framealpha=0.95, 
+             edgecolor='black', fancybox=True, shadow=True)
+    
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.RdBu_r, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, pad=0.01, aspect=30)
+    cbar.set_label('Δp Value', fontsize=11, fontweight='bold')
+    
+    # Add statistics box
+    stats_text = (f'Statistics:\n'
+                 f'Mean: {mu:.4f}\n'
+                 f'Std: {std:.4f}\n'
+                 f'Min: {np.min(delta_p):.4f}\n'
+                 f'Max: {np.max(delta_p):.4f}\n'
+                 f'Range: {np.max(delta_p) - np.min(delta_p):.4f}\n'
+                 f'Baseline: {baseline_prob:.4f}')
+    
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9, 
+                edgecolor='black', linewidth=1.5)
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+            fontsize=10, verticalalignment='top', bbox=props,
+            family='monospace')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print detailed summary
+    print(f"\n{'='*70}")
+    print(f"{'MULTI-AA SCANNING SUMMARY':^70}")
+    print(f"{'='*70}")
+    print(f"\n{'Sequence Information:':<30}")
+    print(f"  {'Length:':<25} {len(sequence)}")
+    print(f"  {'Protein:':<25} {protein_name}")
+    print(f"  {'Substitute AAs:':<25} {', '.join(substitute_aas)}")
+    print(f"  {'Baseline Probability:':<25} {baseline_prob:.4f}")
+    print(f"\n{'Statistical Summary:':<30}")
+    print(f"  {'Mean Δp:':<25} {mu:.4f}")
+    print(f"  {'Std Δp:':<25} {std:.4f}")
+    print(f"  {'Min Δp:':<25} {np.min(delta_p):.4f}")
+    print(f"  {'Max Δp:':<25} {np.max(delta_p):.4f}")
+    print(f"  {'Threshold (+2σ):':<25} {mu + cutoff:.4f}")
+    print(f"  {'Threshold (-2σ):':<25} {mu - cutoff:.4f}")
+    
+    print(f"\n{'─'*70}")
+    print(f"{'TOP CRITICAL RESIDUES (Largest Negative Δp)':^70}")
+    print(f"{'─'*70}")
+    print(f"{'Rank':<8}{'Position':<12}{'Residue':<12}{'Δp':<15}{'Status':<20}")
+    print(f"{'─'*70}")
+    
+    critical_indices = np.argsort(delta_p)[:top_n]
+    for rank, idx in enumerate(critical_indices, 1):
+        status = "⚠️  Beyond threshold" if delta_p[idx] < (mu - cutoff) else "Within range"
+        print(f"{rank:<8}{idx+1:<12}{sequence[idx]:<12}{delta_p[idx]:<15.4f}{status:<20}")
+    
+    # Show per-AA breakdown for top critical residues if available
+    if per_aa_results:
+        print(f"\n{'Per-AA breakdown for top critical residues:':<30}")
+        for rank, idx in enumerate(critical_indices[:5], 1):  # Top 5
+            print(f"\n  Position {idx+1} ({sequence[idx]}):")
+            for aa in substitute_aas:
+                if aa in per_aa_results:
+                    aa_delta = per_aa_results[aa]['delta_probs'][idx]
+                    print(f"    {aa}: {aa_delta:>8.4f}")
+    
+    print(f"\n{'─'*70}")
+    print(f"{'TOP STABILIZING RESIDUES (Largest Positive Δp)':^70}")
+    print(f"{'─'*70}")
+    print(f"{'Rank':<8}{'Position':<12}{'Residue':<12}{'Δp':<15}{'Status':<20}")
+    print(f"{'─'*70}")
+    
+    stabilizing_indices = np.argsort(delta_p)[-top_n:][::-1]
+    for rank, idx in enumerate(stabilizing_indices, 1):
+        status = "✓ Beyond threshold" if delta_p[idx] > (mu + cutoff) else "Within range"
+        print(f"{rank:<8}{idx+1:<12}{sequence[idx]:<12}{delta_p[idx]:<15.4f}{status:<20}")
+    
+    # Show per-AA breakdown for top stabilizing residues if available
+    if per_aa_results:
+        print(f"\n{'Per-AA breakdown for top stabilizing residues:':<30}")
+        for rank, idx in enumerate(stabilizing_indices[:5], 1):  # Top 5
+            print(f"\n  Position {idx+1} ({sequence[idx]}):")
+            for aa in substitute_aas:
+                if aa in per_aa_results:
+                    aa_delta = per_aa_results[aa]['delta_probs'][idx]
+                    print(f"    {aa}: {aa_delta:>8.4f}")
+    
+    print(f"{'='*70}\n")
 
