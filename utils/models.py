@@ -5,35 +5,33 @@ import torch.nn.functional as F
 from typing import List
 
 
-# Classification Head
 class AttentionClassificationHead(nn.Module):
 
-    def __init__(self, in_features: int = 480) -> None:
+    def __init__(self, in_features_dim = 480, num_heads = 8):
         super(AttentionClassificationHead, self).__init__() 
 
-        self.in_features = in_features
+        self.in_features = in_features_dim
 
         # initialise multi-head attention layer
-        # ATTENTION: in_features % num_heads != 0 → crash.
-        self.attention_layer = nn.MultiheadAttention(embed_dim=in_features, num_heads=8)  
+        self.attention_layer = nn.MultiheadAttention(embed_dim=in_features_dim, num_heads=num_heads)  
 
         # initialize layer normalization layers
-        self.layer_norm = nn.LayerNorm(in_features)
+        self.layer_norm = nn.LayerNorm(in_features_dim)
 
         # initialize feed-forward neural network
         self.ffnn = nn.Sequential(
-            nn.Linear(in_features, in_features*4),
+            nn.Linear(in_features_dim, in_features_dim*4),
             nn.GELU(),
-            nn.Linear(in_features*4, in_features),
+            nn.Linear(in_features_dim*4, in_features_dim),
             nn.Dropout(0.3),
         )
 
         # initialize layer normalization for ffnn
-        self.ffnn_layer_norm = nn.LayerNorm(in_features)
+        self.ffnn_layer_norm = nn.LayerNorm(in_features_dim)
 
         # initialize classification layers
         self.classifier = nn.Sequential(
-            nn.Linear(2*in_features, 1280), # 2*in_features because of pooling concatenation
+            nn.Linear(2*in_features_dim, 1280), # 2*in_features because of pooling concatenation
             nn.ReLU(),
             nn.Linear(1280, 628),
             nn.ReLU(),
@@ -81,19 +79,35 @@ class AttentionClassificationHead(nn.Module):
         return logits
     
 
-# Define Model (ESM+ClassificatioHead)
+# Model = ESM + ClassificationHead
 class EsmDeepSec(nn.Module):
 
-    def __init__(self, esm_model):
+    def __init__(self, esm_model, type_head="attention", type_emb_for_classification=""):
         super(EsmDeepSec, self).__init__()
+
+        # Check head type
+        types_head = ["attention", "MLP", "CNN"]
+        assert type_head in types_head, f"type_head must be one of {types_head}"
+        self.type_head = type_head
+
+        # Check emb type
+        types_emb_for_classification = ["agg_mean", "agg_max", "cls", "concat(agg_mean, agg_max)", "contextualized_embs"]
+        assert type_emb_for_classification in types_emb_for_classification, f"type_emb_for_classification must be one of {type_emb_for_classification}"
+        self.type_emb_for_classification = type_emb_for_classification
 
         # ESM base
         self.esm_model = esm_model  
 
+        # ESM contextualised embeddings dimension (need for input to classifcation head)
         self.ESM_hidden_dim = self.esm_model.config.hidden_size
 
         # Classification Head
-        self.feature_fn = AttentionClassificationHead(in_features=self.ESM_hidden_dim)
+        if type_head == "attention":
+            self.feature_fn = AttentionClassificationHead(in_features_dim=self.ESM_hidden_dim)
+        elif type_head == "MLP":
+            pass
+        elif type_head == "CNN":
+            pass
 
 
     def forward(self, input_ids, attention_mask=None):
