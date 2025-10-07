@@ -10,7 +10,7 @@ import umap
 import pandas as pd
 import numpy as np
 import math
-from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef
+from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef, classification_report, confusion_matrix
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.patches as mpatches
 import warnings
@@ -281,46 +281,199 @@ def train(net, train_dl, valid_dl, test_dl, config):
         test_last_eval
     ) 
 
-
 def summarize_training(
     train_loss_history, train_acc_history, train_last_eval,
     valid_loss_history, valid_acc_history, valid_last_eval,
     test_loss_history, test_acc_history, test_last_eval
 ):
     """
-    Prints final loss & accuracy for each set and plots loss/accuracy histories.
+    Comprehensive summary of training with multiple metrics, visualizations, and confusion matrices.
+    
+    Args:
+        *_loss_history: List of loss values at each evaluation step
+        *_acc_history: List of accuracy values at each evaluation step
+        *_last_eval: Dictionary containing final evaluation metrics including:
+            - loss, accuracy, balanced_accuracy, f1, mcc
+            - probs, labels, pred_labels (tensors)
     """
-
-    # --- Print final metrics ---
-    print("\n=== Final Evaluation Metrics ===")
-    print(f"Train   -> Loss: {train_last_eval['loss']:.4f}, Accuracy: {train_last_eval['accuracy']*100:.2f}%")
-    print(f"Valid   -> Loss: {valid_last_eval['loss']:.4f}, Accuracy: {valid_last_eval['accuracy']*100:.2f}%")
-    print(f"Test    -> Loss: {test_last_eval['loss']:.4f}, Accuracy: {test_last_eval['accuracy']*100:.2f}%")
-
-    # --- Prepare data for plotting ---
-    sns.set(style="whitegrid")
-    fig, axes = plt.subplots(1, 2, figsize=(14,5))
-
-    # Loss plot
-    axes[0].plot(train_loss_history, label="Train Loss", marker='o')
-    axes[0].plot(valid_loss_history, label="Valid Loss", marker='o')
-    axes[0].plot(test_loss_history, label="Test Loss", marker='o')
-    axes[0].set_title("Loss History")
-    axes[0].set_xlabel("Evaluation Step")
-    axes[0].set_ylabel("Loss")
-    axes[0].legend()
-
-    # Accuracy plot
-    axes[1].plot(train_acc_history, label="Train Acc", marker='o')
-    axes[1].plot(valid_acc_history, label="Valid Acc", marker='o')
-    axes[1].plot(test_acc_history, label="Test Acc", marker='o')
-    axes[1].set_title("Accuracy History")
-    axes[1].set_xlabel("Evaluation Step")
-    axes[1].set_ylabel("Accuracy")
-    axes[1].legend()
-
-    plt.tight_layout()
+    
+    # ============================================================================
+    # SECTION 1: Comprehensive Metrics Table
+    # ============================================================================
+    print("\n" + "="*80)
+    print(" "*25 + "FINAL EVALUATION METRICS")
+    print("="*80)
+    
+    metrics_table = [
+        ["Metric", "Train", "Validation", "Test"],
+        ["-"*15, "-"*15, "-"*15, "-"*15],
+        ["Loss", 
+         f"{train_last_eval['loss']:.4f}",
+         f"{valid_last_eval['loss']:.4f}",
+         f"{test_last_eval['loss']:.4f}"],
+        ["Accuracy",
+         f"{train_last_eval['accuracy']*100:.2f}%",
+         f"{valid_last_eval['accuracy']*100:.2f}%",
+         f"{test_last_eval['accuracy']*100:.2f}%"],
+        ["Balanced Acc",
+         f"{train_last_eval['balanced_accuracy']*100:.2f}%",
+         f"{valid_last_eval['balanced_accuracy']*100:.2f}%",
+         f"{test_last_eval['balanced_accuracy']*100:.2f}%"],
+        ["F1 Score",
+         f"{train_last_eval['f1']:.4f}",
+         f"{valid_last_eval['f1']:.4f}",
+         f"{test_last_eval['f1']:.4f}"],
+        ["MCC",
+         f"{train_last_eval['mcc']:.4f}",
+         f"{valid_last_eval['mcc']:.4f}",
+         f"{test_last_eval['mcc']:.4f}"],
+    ]
+    
+    for row in metrics_table:
+        print(f"{row[0]:<15} {row[1]:>15} {row[2]:>15} {row[3]:>15}")
+    
+    print("="*80)
+    
+    # ============================================================================
+    # SECTION 2: Performance Analysis
+    # ============================================================================
+    print("\n" + "="*80)
+    print(" "*28 + "PERFORMANCE ANALYSIS")
+    print("="*80)
+    
+    # Overfitting check
+    train_val_gap = train_last_eval['accuracy'] - valid_last_eval['accuracy']
+    if abs(train_val_gap) > 0.10:
+        status = "⚠️  SIGNIFICANT OVERFITTING DETECTED" if train_val_gap > 0 else "⚠️  UNUSUAL PATTERN"
+        print(f"\n{status}")
+        print(f"   Train-Valid gap: {train_val_gap*100:+.2f}%")
+    else:
+        print(f"\n✓ Good generalization (Train-Valid gap: {train_val_gap*100:+.2f}%)")
+    
+    # Test performance
+    test_val_gap = test_last_eval['accuracy'] - valid_last_eval['accuracy']
+    print(f"✓ Test-Valid gap: {test_val_gap*100:+.2f}%")
+    
+    # Class balance check
+    train_labels = train_last_eval['labels'].numpy()
+    class_dist = np.bincount(train_labels)
+    imbalance_ratio = class_dist.max() / class_dist.min()
+    print(f"\n✓ Class distribution (Test): {dict(enumerate(class_dist))}")
+    if imbalance_ratio > 1.5:
+        print(f"⚠️  Class imbalance detected (ratio: {imbalance_ratio:.2f}:1)")
+        print(f"   → Balanced accuracy is more reliable than accuracy")
+    
+    print("="*80)
+    
+    # ============================================================================
+    # SECTION 3: Visualizations
+    # ============================================================================
+    sns.set_style("whitegrid")
+    fig = plt.figure(figsize=(18, 10))
+    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+    
+    # Row 1: Loss and Accuracy curves
+    ax1 = fig.add_subplot(gs[0, :2])
+    ax1.plot(train_loss_history, label="Train", marker='o', linewidth=2, markersize=6)
+    ax1.plot(valid_loss_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    ax1.plot(test_loss_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax1.set_title("Loss History", fontsize=14, fontweight='bold')
+    ax1.set_xlabel("Evaluation Step", fontsize=11)
+    ax1.set_ylabel("Loss", fontsize=11)
+    ax1.legend(fontsize=10)
+    ax1.grid(alpha=0.3)
+    
+    ax2 = fig.add_subplot(gs[0, 2])
+    ax2.plot(train_acc_history, label="Train", marker='o', linewidth=2, markersize=6)
+    ax2.plot(valid_acc_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    ax2.plot(test_acc_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax2.set_title("Balanced Accuracy History", fontsize=14, fontweight='bold')
+    ax2.set_xlabel("Evaluation Step", fontsize=11)
+    ax2.set_ylabel("Balanced Accuracy", fontsize=11)
+    ax2.legend(fontsize=10)
+    ax2.grid(alpha=0.3)
+    
+    # Row 2: Confusion Matrices
+    datasets = [
+        (train_last_eval, "Train", gs[1, 0]),
+        (valid_last_eval, "Valid", gs[1, 1]),
+        (test_last_eval, "Test", gs[1, 2])
+    ]
+    
+    for eval_dict, name, grid_pos in datasets:
+        ax = fig.add_subplot(grid_pos)
+        cm = confusion_matrix(
+            eval_dict['labels'].numpy(),
+            eval_dict['pred_labels'].numpy()
+        )
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, 
+                    cbar=False, square=True, annot_kws={"size": 12})
+        ax.set_title(f'{name} Confusion Matrix', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Predicted', fontsize=10)
+        ax.set_ylabel('Actual', fontsize=10)
+    
+    # Row 3: Metrics comparison bar chart
+    ax7 = fig.add_subplot(gs[2, :])
+    metrics_names = ['Accuracy', 'Balanced Accuracy', 'F1 Score', 'MCC']
+    train_metrics = [
+        train_last_eval['accuracy'],
+        train_last_eval['balanced_accuracy'],
+        train_last_eval['f1'],
+        (train_last_eval['mcc'] + 1) / 2  # Normalize MCC to [0,1] for visualization
+    ]
+    valid_metrics = [
+        valid_last_eval['accuracy'],
+        valid_last_eval['balanced_accuracy'],
+        valid_last_eval['f1'],
+        (valid_last_eval['mcc'] + 1) / 2
+    ]
+    test_metrics = [
+        test_last_eval['accuracy'],
+        test_last_eval['balanced_accuracy'],
+        test_last_eval['f1'],
+        (test_last_eval['mcc'] + 1) / 2
+    ]
+    
+    x = np.arange(len(metrics_names))
+    width = 0.25
+    
+    ax7.bar(x - width, train_metrics, width, label='Train', alpha=0.8)
+    ax7.bar(x, valid_metrics, width, label='Valid', alpha=0.8)
+    ax7.bar(x + width, test_metrics, width, label='Test', alpha=0.8)
+    
+    ax7.set_xlabel('Metrics', fontsize=11, fontweight='bold')
+    ax7.set_ylabel('Score', fontsize=11, fontweight='bold')
+    ax7.set_title('Metrics Comparison Across Datasets', fontsize=14, fontweight='bold')
+    ax7.set_xticks(x)
+    ax7.set_xticklabels(metrics_names)
+    ax7.legend(fontsize=10)
+    ax7.grid(axis='y', alpha=0.3)
+    ax7.set_ylim([0, 1.1])
+    
+    # Add note about MCC normalization
+    ax7.text(0.98, 0.02, 'Note: MCC normalized to [0,1] for visualization',
+             transform=ax7.transAxes, fontsize=8, style='italic',
+             horizontalalignment='right', verticalalignment='bottom',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    
+    plt.suptitle('Training Summary Dashboard', fontsize=16, fontweight='bold', y=0.995)
     plt.show()
+    
+    # ============================================================================
+    # SECTION 4: Detailed Classification Report (Test Set)
+    # ============================================================================
+    print("\n" + "="*80)
+    print(" "*25 + "TEST SET CLASSIFICATION REPORT")
+    print("="*80)
+    print(classification_report(
+        test_last_eval['labels'].numpy(),
+        test_last_eval['pred_labels'].numpy(),
+        target_names=['Class 0', 'Class 1'],
+        digits=4
+    ))
+    print("="*80 + "\n")
+
+
 
 
 ############################################################################################################################
