@@ -167,13 +167,12 @@ class AttentionClassificationHead(nn.Module):
         out = self.ffnn_layer_norm(ffnn_output)
 
         # store emb to access later if needed
-        self.avg_pool = torch.mean(out, dim=1)      # [batch, hidden]
-        self.max_pool, _ = torch.max(out, dim=1)    # [batch, hidden]
-        self.cls_repr = out[:, 0, :]                # take CLS token before pooling [batch, hidden]
+        avg_pool = torch.mean(out, dim=1)      # [batch, hidden]
+        max_pool, _ = torch.max(out, dim=1)    # [batch, hidden]
+        cls_repr = out[:, 0, :]                # take CLS token before pooling [batch, hidden]
 
         # concatenate
-        concat_out = torch.cat((self.avg_pool, self.max_pool), dim=1)  # [batch, 2*hidden]
-        self.concat_repr = concat_out
+        concat_out = torch.cat((avg_pool, max_pool), dim=1)  # [batch, 2*hidden]
 
         # classifier
         logits = self.classifier(concat_out)        # [batch, 2]
@@ -181,9 +180,9 @@ class AttentionClassificationHead(nn.Module):
         if return_embs:
             logits = logits
             embs = {
-                "class_head_mean": self.avg_pool,
-                "class_head_max": self.max_pool,
-                "class_head_cls": self.cls_repr,
+                "class_head_mean": avg_pool.detach(), #shares the same data but is disconnected from the computation graph.
+                "class_head_max": max_pool.detach(),
+                "class_head_cls": cls_repr.detach(),
             } 
             return logits, embs
 
@@ -263,6 +262,7 @@ class EsmDeepSec(nn.Module):
                 self.in_features_dim = self.ESM_hidden_dim
         
         else: 
+            assert precomputed_embs_dim is not None, "precomputed_embs_dim must be provided when from_precomputed_embs=True."
             self.in_features_dim = precomputed_embs_dim
             self.from_precomputed_embs = from_precomputed_embs
 
@@ -275,7 +275,13 @@ class EsmDeepSec(nn.Module):
             pass            
 
 
-    def forward(self, input_ids, attention_mask, return_embs=False, precomputed_embs=None):
+    def forward(self, input_ids=None, attention_mask=None, return_embs=False, precomputed_embs=None):
+
+        # define in case we are not using due to precimpued embs
+        outputs_esm = None
+
+        if self.from_precomputed_embs:
+            assert precomputed_embs is not None, "precomputed_embs must be provided when from_precomputed_embs=True."
 
         if not self.from_precomputed_embs:
 
@@ -313,15 +319,18 @@ class EsmDeepSec(nn.Module):
         else:
             input_class_head = precomputed_embs
 
-        # return ONLY embs   (embs of calss_head too)
+        # return ONLY embs   (embs of calss_head too)        
         if return_embs:
             logits, class_head_emb = self.class_head(input_class_head, return_embs=return_embs) # [batch_size, 2]
-            embs = {
-                "esm_mean": torch.mean(outputs_esm.last_hidden_state, dim=1),
-                "esm_max": torch.max(outputs_esm.last_hidden_state, dim=1)[0], 
-                "esm_csl": outputs_esm.last_hidden_state[:, 0, :],
-                "class_head_embs": class_head_emb
-            }
+            
+            embs = {"class_head_embs": class_head_emb}
+            
+            # Add ESM embeddings ONLY if the ESM model was used
+            if outputs_esm is not None:
+                embs["esm_mean"] = torch.mean(outputs_esm.last_hidden_state, dim=1)
+                embs["esm_max"] = torch.max(outputs_esm.last_hidden_state, dim=1)[0]
+                embs["esm_csl"] = outputs_esm.last_hidden_state[:, 0, :]
+                
             return logits, embs
 
         # pass thugh class head

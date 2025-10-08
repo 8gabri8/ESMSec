@@ -149,7 +149,7 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
     }
 
 
-def train(net, train_dl, valid_dl, test_dl, config):
+def train(net, train_dl, valid_dl, test_dl, loss_fn, config):
 
     # Train
     train_loss_history = []
@@ -187,7 +187,7 @@ def train(net, train_dl, valid_dl, test_dl, config):
     # Initialise obj
     optimizer = AdamW(net.class_head.parameters(), lr=lr) # ONLY train the classification head
     exp_lr = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # step_size=N → the LR changes after step() has been called N times
-    loss_fn = nn.CrossEntropyLoss() # binary classfication, needs logits
+    #loss_fn = nn.CrossEntropyLoss() # binary classfication, needs logits
 
     # Set model to training mode
     net.train()
@@ -197,7 +197,9 @@ def train(net, train_dl, valid_dl, test_dl, config):
 
         net.train() # back to train mode
 
-        for batch in tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit=" train batch", leave=False):
+        pbar = tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit="train batch", leave=False)
+
+        for batch in pbar:
             
             # unpack
             seq, attention_mask, label, _ = batch
@@ -218,6 +220,9 @@ def train(net, train_dl, valid_dl, test_dl, config):
             loss.backward()
             # paramers update
             optimizer.step()
+
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
+
 
 
         # EVALUATION EVERY TOT EPOCHS
@@ -259,7 +264,8 @@ def train(net, train_dl, valid_dl, test_dl, config):
             monitor_gpu_memory()
 
         # increment learning rate decay counter PER EPOCH
-        #exp_lr.step() # increments the internal counter
+        exp_lr.step() # increments the internal counter
+        print(f"Epoch {epoch_idx}, New LR: {exp_lr.get_last_lr()[0]}")
 
     # claean up
     torch.cuda.empty_cache() 
@@ -387,9 +393,9 @@ def summarize_training(
     ax2.plot(train_acc_history, label="Train", marker='o', linewidth=2, markersize=6)
     ax2.plot(valid_acc_history, label="Valid", marker='s', linewidth=2, markersize=6)
     ax2.plot(test_acc_history, label="Test", marker='^', linewidth=2, markersize=6)
-    ax2.set_title("Balanced Accuracy History", fontsize=14, fontweight='bold')
+    ax2.set_title("Accuracy History", fontsize=14, fontweight='bold')
     ax2.set_xlabel("Evaluation Step", fontsize=11)
-    ax2.set_ylabel("Balanced Accuracy", fontsize=11)
+    ax2.set_ylabel("Accuracy", fontsize=11)
     ax2.legend(fontsize=10)
     ax2.grid(alpha=0.3)
     
