@@ -54,7 +54,7 @@ def monitor_gpu_memory():
 ############################################################################################################################
 
 
-def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=True):
+def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=True, from_precomputed_embs=False):
     """
     Evaluate the model on a given dataset (train/val/test).
     
@@ -92,11 +92,15 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
     with torch.no_grad():
         for batch in tqdm(dl, desc=f"Evaluation", unit=f" {split_name} batch", leave=False):
 
-            seq, attention_mask, label, _ = batch
+            seq, attention_mask, label, _, emb= batch
 
-            seq, attention_mask, label = seq.to(device), attention_mask.to(device), label.to(device)
+            seq, attention_mask, label, emb = seq.to(device), attention_mask.to(device), label.to(device), emb.to(device)
 
-            output = net(seq, attention_mask=attention_mask)
+            if from_precomputed_embs:
+                output = net(precomputed_embs=emb)
+            else:
+                output = net(seq, attention_mask=attention_mask) # seq --> [batch_size, 2], TOKENISEd protein sequences
+
             probs = torch.softmax(output, dim=-1)
             preds = torch.argmax(probs, dim=-1)
             loss = loss_fn(output, label) # already compute SINGLE BATCH AVERAGE
@@ -149,7 +153,7 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
     }
 
 
-def train(net, train_dl, valid_dl, test_dl, loss_fn, config):
+def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_embs=False):
 
     # Train
     train_loss_history = []
@@ -202,16 +206,20 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config):
         for batch in pbar:
             
             # unpack
-            seq, attention_mask, label, _ = batch
+            seq, attention_mask, label, _, emb = batch
 
             # set model to trainign mode
             net.train()
 
             #move to device
-            seq, attention_mask, label = seq.to(device), attention_mask.to(device), label.to(device)
+            seq, attention_mask, label, emb = seq.to(device), attention_mask.to(device), label.to(device), emb.to(device)
             
             # Forward apss
-            output = net(seq, attention_mask=attention_mask) # seq --> [batch_size, 2], TOKENISEd protein sequences
+            if from_precomputed_embs:
+                output = net(precomputed_embs=emb)
+            else:
+                output = net(seq, attention_mask=attention_mask) # seq --> [batch_size, 2], TOKENISEd protein sequences
+
             # compute loss
             loss = loss_fn(output, label) # crossEntripyLoss() expects RAW logits, so it is correct passing direclty "outpu"
             # clear previous gradients
@@ -232,9 +240,9 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config):
             print(f"--- Evaluation at iteration {epoch_idx} ---")
 
             # Return metrics of current evaluation
-            train_metrics = evaluate_model(net, train_dl, device, loss_fn, split_name="Train")
-            valid_metrics = evaluate_model(net, valid_dl, device, loss_fn, split_name="Validation")
-            test_metrics  = evaluate_model(net, test_dl, device, loss_fn, split_name="Test")
+            train_metrics = evaluate_model(net, train_dl, device, loss_fn, split_name="Train", from_precomputed_embs=from_precomputed_embs)
+            valid_metrics = evaluate_model(net, valid_dl, device, loss_fn, split_name="Validation", from_precomputed_embs=from_precomputed_embs)
+            test_metrics  = evaluate_model(net, test_dl, device, loss_fn, split_name="Test", from_precomputed_embs=from_precomputed_embs)
 
             # Save histories
             train_loss_history.append(train_metrics["loss"])
