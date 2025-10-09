@@ -225,7 +225,7 @@ class MLPHead(nn.Module):
 # Model = ESM + ClassificationHead
 class EsmDeepSec(nn.Module):
 
-    def __init__(self, esm_model, type_head="attention", type_emb_for_classification="contextualized_embs", from_precomputed_embs=False, precomputed_embs_dim=None):
+    def __init__(self, esm_model=None, type_head="attention", type_emb_for_classification="contextualized_embs", from_precomputed_embs=False, precomputed_embs_dim=None):
         super(EsmDeepSec, self).__init__()
 
         # Check head type
@@ -234,6 +234,9 @@ class EsmDeepSec(nn.Module):
         self.type_head = type_head
 
         self.from_precomputed_embs = from_precomputed_embs
+
+        self.esm_model = esm_model  
+        self.ESM_hidden_dim = precomputed_embs_dim
 
         # Checj if ESM is needed
         if not self.from_precomputed_embs:
@@ -246,9 +249,6 @@ class EsmDeepSec(nn.Module):
             valid_emb_types = [v for values in types_emb_for_classification.values() for v in values]
             assert type_emb_for_classification in valid_emb_types, f"type_emb_for_classification must be one of {list(valid_emb_types)}"        
             self.type_emb_for_classification = type_emb_for_classification
-
-            # ESM base
-            self.esm_model = esm_model  
 
             # ESM contextualised embeddings dimension 
             self.ESM_hidden_dim = self.esm_model.config.hidden_size
@@ -321,15 +321,21 @@ class EsmDeepSec(nn.Module):
 
         # return ONLY embs   (embs of calss_head too)        
         if return_embs:
+
+            embs = {}
+
+            # For sure calculare head embs
             logits, class_head_emb = self.class_head(input_class_head, return_embs=return_embs) # [batch_size, 2]
-            
-            embs = {"class_head_embs": class_head_emb}
+            embs["class_head_embs"] =  class_head_emb
             
             # Add ESM embeddings ONLY if the ESM model was used
             if outputs_esm is not None:
                 embs["esm_mean"] = torch.mean(outputs_esm.last_hidden_state, dim=1)
                 embs["esm_max"] = torch.max(outputs_esm.last_hidden_state, dim=1)[0]
                 embs["esm_csl"] = outputs_esm.last_hidden_state[:, 0, :]
+
+            # Add precomputed emb in case
+            embs["precomputed_embs"] = precomputed_embs
                 
             return logits, embs
 

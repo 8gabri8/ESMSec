@@ -44,34 +44,6 @@ def load_json_folder_to_df(folder_path):
     return df
 
 
-def filter_gene_sets_by_keywords(
-    df,
-    include_pattern = r"(^PROLIFERA|\bPROLIFER\b|_PROLIFER_|_CYCLING_|^CELL_CYCLE_|_CELL_CYCLE_|_CC_|_G1_|_S_PHASE_|_G2_|_M_PHASE_|\bMITOSIS\b|\bCYCLIN\b|\bCDK\b|\bCHECKPOINT\b|\bGS1\b|\bGS2\b)",
-    exclude_pattern= r"(MEIOSIS|FATTY_ACID_CYCLING_MODEL)",
-    col_name = "set_name"
-):
-    """
-    Filters a DataFrame of gene sets by regex patterns applied to 'set_name'.
-
-    Args:
-        df (pd.DataFrame): DataFrame with a 'set_name' column.
-        include_pattern (str): Regex pattern for inclusion.
-        exclude_pattern (str): Regex pattern for exclusion.
-
-    Returns:
-        pd.DataFrame: Filtered DataFrame matching include_pattern but not exclude_pattern.
-    """
-    if col_name not in df.columns:
-        raise ValueError(f"DataFrame must contain a {col_name} column")
-
-    # Apply inclusion and exclusion regex filters
-    mask_include = df[col_name].str.contains(include_pattern, case=False, regex=True)
-    mask_exclude = df[col_name].str.contains(exclude_pattern, case=False, regex=True)
-
-    filtered_df = df[mask_include & ~mask_exclude].copy()
-    return filtered_df
-
-
 def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols", split_symbol=","):
     """
     Create a new DataFrame showing each gene and how many gene sets it appears in.

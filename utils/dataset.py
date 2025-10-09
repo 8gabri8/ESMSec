@@ -51,7 +51,7 @@ def create_dataloader(processed_df, set_name, batch_size, shuffle=False, pin_mem
     attention_mask = torch.stack([t.long() for t in processed_df.loc[set_idx, 'attention_mask'].tolist()])
     labels = torch.tensor(processed_df.loc[set_idx, 'label'].values, dtype=torch.long)
     names = processed_df.loc[set_idx, 'protein'].tolist()
-    embs = torch.stack([t.long() for t in processed_df.loc[set_idx, 'embedding'].tolist()]) 
+    embs = torch.stack([t.float() for t in processed_df.loc[set_idx, 'embedding'].tolist()]) 
     
     # Create dataset
     dataset = ProteinDataset(
