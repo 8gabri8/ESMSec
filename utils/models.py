@@ -180,9 +180,9 @@ class AttentionClassificationHead(nn.Module):
         if return_embs:
             logits = logits
             embs = {
-                "class_head_mean": avg_pool.detach(), #shares the same data but is disconnected from the computation graph.
-                "class_head_max": max_pool.detach(),
-                "class_head_cls": cls_repr.detach(),
+                "class_head_attention_mean": avg_pool.detach(), #shares the same data but is disconnected from the computation graph.
+                "class_head_attention_max": max_pool.detach(),
+                "class_head_attention_cls": cls_repr.detach(),
             } 
             return logits, embs
 

@@ -110,9 +110,15 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
     Returns:
         dict: keys are embedding types, values are 2D embeddings as torch.FloatTensor
     """
+
     umap_tensors = {}
 
     for key, emb in embeddings_dict.items():
+
+        if emb is None:
+            print(f"Skipping {key}: embedding is None")
+            continue
+
         print(f"Computing UMAP for {key} with shape {emb.shape if emb is not None else None}...")
         
         # Convert numpy to tensor if needed
