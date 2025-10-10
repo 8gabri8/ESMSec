@@ -14,7 +14,7 @@ from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef
 from scipy.ndimage import gaussian_filter1d
 import warnings
 from tqdm import tqdm
-from tqdm import tqdm_notebook as tqdm
+from tqdm.notebook import tqdm, trange
 
 
 import dataset as my_dataset
@@ -195,12 +195,17 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     # Set model to training mode
     net.train()
 
+    pbar_epochs = trange(1, num_epochs + 1, desc="Training", unit="epoch", position=0, leave=True)
 
-    for epoch_idx in trange(1, num_epochs + 1, desc="Training", unit="epoch"):
+    for epoch_idx in pbar_epochs:
 
         net.train() # back to train mode
 
-        pbar = tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit="train batch", leave=False)
+        # Add LR as postfix
+        current_lr = exp_lr.get_last_lr()[0]
+        pbar_epochs.set_postfix(LR=f"{current_lr:.6f}")
+
+        pbar = tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit="train batch", position=1, leave=False)
 
         for batch in pbar:
             
@@ -268,11 +273,11 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
             test_last_eval = test_metrics
 
             ### GPU monitoring
-            monitor_gpu_memory()
+            #monitor_gpu_memory()
 
         # increment learning rate decay counter PER EPOCH
         exp_lr.step() # increments the internal counter
-        print(f"Epoch {epoch_idx}, New LR: {exp_lr.get_last_lr()[0]}")
+        #print(f"Epoch {epoch_idx}, New LR: {exp_lr.get_last_lr()[0]}")
 
     # claean up
     torch.cuda.empty_cache() 
@@ -346,37 +351,7 @@ def summarize_training(
         print(f"{row[0]:<15} {row[1]:>15} {row[2]:>15} {row[3]:>15}")
     
     print("="*80)
-    
-    # ============================================================================
-    # SECTION 2: Performance Analysis
-    # ============================================================================
-    print("\n" + "="*80)
-    print(" "*28 + "PERFORMANCE ANALYSIS")
-    print("="*80)
-    
-    # Overfitting check
-    train_val_gap = train_last_eval['accuracy'] - valid_last_eval['accuracy']
-    if abs(train_val_gap) > 0.10:
-        status = "⚠️  SIGNIFICANT OVERFITTING DETECTED" if train_val_gap > 0 else "⚠️  UNUSUAL PATTERN"
-        print(f"\n{status}")
-        print(f"   Train-Valid gap: {train_val_gap*100:+.2f}%")
-    else:
-        print(f"\n✓ Good generalization (Train-Valid gap: {train_val_gap*100:+.2f}%)")
-    
-    # Test performance
-    test_val_gap = test_last_eval['accuracy'] - valid_last_eval['accuracy']
-    print(f"✓ Test-Valid gap: {test_val_gap*100:+.2f}%")
-    
-    # Class balance check
-    train_labels = train_last_eval['labels'].numpy()
-    class_dist = np.bincount(train_labels)
-    imbalance_ratio = class_dist.max() / class_dist.min()
-    print(f"\n✓ Class distribution (Test): {dict(enumerate(class_dist))}")
-    if imbalance_ratio > 1.5:
-        print(f"⚠️  Class imbalance detected (ratio: {imbalance_ratio:.2f}:1)")
-        print(f"   → Balanced accuracy is more reliable than accuracy")
-    
-    print("="*80)
+
     
     # ============================================================================
     # SECTION 3: Visualizations

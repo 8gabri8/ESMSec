@@ -187,38 +187,82 @@ class AttentionClassificationHead(nn.Module):
             return logits, embs
 
         return logits
+
+    
+class LogisticRegressionHead(nn.Module):
+    """
+    Simple logistic regression head: just a single linear layer.
+    No hidden layers, no non-linearities - the simplest possible classifier.
+    """
+    def __init__(self, in_features_dim=320):
+        super(LogisticRegressionHead, self).__init__()
+        
+        # Single linear layer: input -> 2 classes
+        self.classifier = nn.Linear(in_features_dim, 2)
+    
+    def forward(self, x, return_embs=False):
+        """
+        Args:
+            x: Input embeddings [batch_size, in_features_dim]
+            return_embs: If True, return logits and embeddings
+        
+        Returns:
+            logits: [batch_size, 2] if return_embs=False
+            (logits, embs): tuple if return_embs=True
+        """
+        logits = self.classifier(x)
+        
+        if return_embs:
+            # Return input embeddings as the "embeddings"
+            embs = {'input_features': x}
+            return logits, embs
+        
+        return logits
     
 
 class MLPHead(nn.Module):
-    def __init__(self, in_features_dim=480, dropout_prob=0.3):
+    def __init__(self, in_features_dim=480, dropout_prob=0.5):
         super(MLPHead, self).__init__()
 
-        self.mlp = nn.Sequential(
+        self.layer1 = nn.Sequential(
             nn.Linear(in_features_dim, 1280),
             nn.LayerNorm(1280),
             nn.ReLU(),
-            nn.Dropout(dropout_prob),
-
+            nn.Dropout(dropout_prob)
+        )
+        
+        self.layer2 = nn.Sequential(
             nn.Linear(1280, 628),
             nn.LayerNorm(628),
             nn.ReLU(),
-            nn.Dropout(dropout_prob),
-
+            nn.Dropout(dropout_prob)
+        )
+        
+        self.layer3 = nn.Sequential(
             nn.Linear(628, 32),
             nn.LayerNorm(32),
-            nn.ReLU(),
-
-            nn.Linear(32, 2)  # Binary classification
+            nn.ReLU()
         )
+        
+        self.classifier = nn.Linear(32, 2)
 
     def forward(self, x, return_embs=False):
-
         if return_embs:
-            logits = self.mlp(x)
-            embs = {} # no internal interesting embeddings to report
+            h1 = self.layer1(x)
+            h2 = self.layer2(h1)
+            h3 = self.layer3(h2)
+            logits = self.classifier(h3)
+            
+            embs = {
+                'mlp_layer3': h3   # [batch, 32] - most useful for visualization
+            }
             return logits, embs
         
-        return self.mlp(x) # logits [batch, 2]
+        # Normal forward pass
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return self.classifier(x)
 
 
 
@@ -229,7 +273,7 @@ class EsmDeepSec(nn.Module):
         super(EsmDeepSec, self).__init__()
 
         # Check head type
-        types_head = ["attention", "MLP", "CNN"]
+        types_head = ["attention", "MLP", "CNN", "LR"]
         assert type_head in types_head, f"type_head must be one of {types_head}"
         self.type_head = type_head
 
@@ -271,6 +315,8 @@ class EsmDeepSec(nn.Module):
             self.class_head = AttentionClassificationHead(in_features_dim=self.in_features_dim)
         elif type_head == "MLP":
             self.class_head = MLPHead(in_features_dim=self.in_features_dim)
+        elif type_head == "LR":
+            self.class_head = LogisticRegressionHead(in_features_dim=self.in_features_dim)
         elif type_head == "CNN":
             pass            
 

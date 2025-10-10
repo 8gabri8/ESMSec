@@ -77,7 +77,8 @@ def extract_embeddings(net, dl, device, cls_index=0, return_numpy=True, from_pre
         
         # Store embeddings (move to CPU)
         for k, v in flat_embs.items():
-            buffers[k].append(v.cpu())
+            if v is not None:
+                buffers[k].append(v.cpu())
         
         # Store names, labels, predictions
         names_list.extend(names)
