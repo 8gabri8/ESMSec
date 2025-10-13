@@ -309,6 +309,8 @@ class EsmDeepSec(nn.Module):
             assert precomputed_embs_dim is not None, "precomputed_embs_dim must be provided when from_precomputed_embs=True."
             self.in_features_dim = precomputed_embs_dim
             self.from_precomputed_embs = from_precomputed_embs
+            self.type_emb_for_classification = type_emb_for_classification # still save the method used to caculte the precompued embs
+
 
         # Classification Head
         if type_head == "attention":

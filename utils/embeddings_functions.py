@@ -44,12 +44,13 @@ def extract_embeddings(net, dl, device, cls_index=0, return_numpy=True, from_pre
     preds_list = []
 
     for batch in tqdm(dl, desc=f"Batch", unit=" batch", leave=False):
-    
-        # unpack
-        seq, attention_mask, label, names, emb = batch
 
-        # move to device
-        seq, attention_mask, label, emb = seq.to(device), attention_mask.to(device), label.to(device), emb.to(device)    
+        seq = batch.get("input_ids").to(device)
+        attention_mask = batch.get("attention_mask").to(device)
+        label = batch.get("label").to(device)
+        emb = batch.get("embs").to(device)
+        names = batch.get("name")
+
 
         # Forward pass with return_embs=True
         if from_precomputed_embs:
