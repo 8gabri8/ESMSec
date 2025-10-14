@@ -4,6 +4,8 @@ import os
 import re
 import pandas as pd
 from collections import defaultdict
+from scipy.stats import hypergeom, binom
+import numpy as np
 
 
 def load_json_folder_to_df(folder_path):
@@ -69,8 +71,51 @@ def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols
     return result
 
 
+def per_cluster_hypergeom_test(cluster_row, total_genes, total_positive):
+    """
+    Tests if cluster is enriched for positive genes
+    
+    Parameters:
+    - cluster_row: row from dataframe with n_genes and n_genes_positive
+    - total_genes: total number of genes across all clusters
+    - total_positive: total number of positive genes across all clusters
+    """
+    # Hypergeometric parameters:
+    # M = total population size
+    # n = number of success states in population (positive genes)
+    # N = number of draws (genes in cluster)
+    
+    M = total_genes
+    n = total_positive
+    N = cluster_row['n_genes']
+    k = cluster_row['n_genes_positive']
+    
+    # One-tailed p-value (testing if cluster has MORE positive genes than expected)
+    p_value = 1 - hypergeom.cdf(k - 1, M, n, N)
+    
+    # Calculate probability of observing exactly k positive genes
+    prob = hypergeom.pmf(k, M, n, N)
+    
+    return prob, p_value
 
+def sample_sampled_from_single_row(row, min_sample_n, prot_col, gene_col, probs_col):
 
+    N = min(len(row[prot_col]), min_sample_n)
+
+    if probs_col != None:
+        probs = row[probs_col] #use precompued prbs
+    else:
+        probs=None # unirform prob
+
+    # sample indices
+    sampled_indices = np.random.choice(len(row[prot_col]), size=N, replace=False, p=probs) 
+
+    # covert to array
+    proteins_array = np.array(row[prot_col])
+    genes_array = np.array(row[gene_col])
+
+    # return sliced
+    return proteins_array[sampled_indices], genes_array[sampled_indices]
 
 
 
