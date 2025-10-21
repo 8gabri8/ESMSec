@@ -1,0 +1,13 @@
+data_paths:
+  MSigDB_all_data: /home/gdallagl/myworkdir/ESMSec/data/MSigDB/msigdb_v2025.1.Hs_json_files_to_download_locally
+  guaranted_positive_genes: /home/gdallagl/myworkdir/ESMSec/data/MSigDB/julies_cycling_signatures_cancer.tsv
+  positive_genesets: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/datasets/cc_positive_genesets.csv
+  broad_positive_genes: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/datasets/cc_broad.csv
+  neftel_data_folder: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/scrna/Neftel_at_al/Data_Neftel2019_Brain/10X
+  metaprograms_3CA: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/scrna/Neftel_at_al/meta_programs_2025-01-29.xlsx
+
+dataset_creation:
+  min_freq_to_be_positive_gene: 3
+  percentage_number_positive_genesets: 0.025
+
+random_seed: 42

@@ -13,11 +13,54 @@ from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef
 from scipy.ndimage import gaussian_filter1d
 from tqdm import tqdm
 from tqdm.notebook import tqdm, trange
+import random
+import yaml
+import os
 
+def set_all_seeds(seed_value=42):
+    """
+    Sets seeds for reproducibility across random, numpy, and PyTorch (if available).
 
-import dataset as my_dataset
+    Args:
+        seed_value (int): The integer seed to use. Default is 42.
+    """
+    # 1. Python's built-in 'random' module
+    random.seed(seed_value)
 
+    # 2. NumPy (often used for data manipulation and initialization)
+    np.random.seed(seed_value)
 
+    # 3. PyTorch (if using deep learning)
+    if torch is not None:
+        torch.manual_seed(seed_value)
+        # For GPU-based operations:
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed_value)
+            torch.cuda.manual_seed_all(seed_value) # For multi-GPU setups
+            
+            # Additional configuration for deterministic GPU operations
+            # NOTE: These settings can sometimes slow down execution.
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            
+    # 4. Environment Variables (optional, for some specific libraries/kernels)
+    os.environ['PYTHONHASHSEED'] = str(seed_value)
+
+    print(f"Seeds set successfully to {seed_value} for random, numpy, and PyTorch (if used).")
+
+def load_config(file_path):
+    """Loads a YAML configuration file into a Python dictionary."""
+    try:
+        with open(file_path, 'r') as file:
+            # Use safe_load to safely parse the YAML file
+            config = yaml.safe_load(file)
+            return config
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at {file_path}")
+        return None
+    except yaml.YAMLError as exc:
+        print(f"Error parsing YAML file: {exc}")
+        return None
 
 def monitor_gpu_memory():
     """
