@@ -129,7 +129,7 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
         emb_2d = umap.UMAP(n_neighbors=n_neighbors, 
                            min_dist=min_dist, 
                            random_state=random_state, 
-                           n_jobs=-1 #Prioritize speed with parallelism, sacrifice exact reproducibility
+                           n_jobs=1 # -1 --> Prioritize speed with parallelism, sacrifice exact reproducibility
                            ).fit_transform(emb)
         umap_tensors[key] = torch.tensor(emb_2d, dtype=torch.float32)
 
@@ -228,3 +228,35 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     plt.show()
 
     return dfs
+
+
+def plot_umap_clusters(df, uamo1_col='UMAP1', uamo2_col='UMAP2', cluster_col='Cluster_Label', title='UMAP Visualization with K-Means Clusters'):
+    """
+    Plots the UMAP coordinates, colored by the cluster assignment.
+    
+    Parameters:
+    - df: The input DataFrame containing UMAP coordinates and cluster labels.
+    - uamo1_col: Name of the column for UMAP dimension 1.
+    - uamo2_col: Name of the column for UMAP dimension 2.
+    - cluster_col: Name of the column with cluster labels.
+    - title: Title for the plot.
+    """
+    plt.figure(figsize=(10, 8))
+    
+    # Use seaborn.scatterplot for easy categorical coloring
+    sns.scatterplot(
+        x=df[uamo1_col],
+        y=df[uamo2_col],
+        hue=df[cluster_col].astype(str), # Convert to string for discrete colors
+        palette='tab20',               # Color palette
+        s=50,                            # Marker size
+        alpha=0.8                        # Transparency
+    )
+    
+    plt.title(title, fontsize=16)
+    plt.xlabel('UMAP Dimension 1 (uamo1)', fontsize=12)
+    plt.ylabel('UMAP Dimension 2 (uamo2)', fontsize=12)
+    plt.legend(title='Cluster', loc='best', bbox_to_anchor=(1.05, 1))
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.show()

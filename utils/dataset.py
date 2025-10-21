@@ -21,28 +21,28 @@ def subset_data_dict(cache_data, indices):
     return sub_data
 
 
-class ProteinDataset(Dataset):
-    def __init__(self, names, labels, input_ids=None, attention_mask=None, embs=None):
-        """
-        Generic dataset. Assumes that all data passed here is already filtered for the split.
-        """
-        self.names = names
-        self.labels = torch.tensor(labels, dtype=torch.long) if not isinstance(labels, torch.Tensor) else labels
-        self.input_ids = input_ids
-        self.attention_mask = attention_mask
-        self.embs = embs
+# class ProteinDataset(Dataset):
+#     def __init__(self, names, labels, input_ids=None, attention_mask=None, embs=None):
+#         """
+#         Generic dataset. Assumes that all data passed here is already filtered for the split.
+#         """
+#         self.names = names
+#         self.labels = torch.tensor(labels, dtype=torch.long) if not isinstance(labels, torch.Tensor) else labels
+#         self.input_ids = input_ids
+#         self.attention_mask = attention_mask
+#         self.embs = embs
 
-    def __len__(self):
-        return len(self.labels)
+#     def __len__(self):
+#         return len(self.labels)
 
-    def __getitem__(self, idx):
-        input_id_item = self.input_ids[idx] if self.input_ids is not None else None
-        attn_mask_item = self.attention_mask[idx] if self.attention_mask is not None else None
-        emb_item = self.embs[idx] if self.embs is not None else None
-        label = self.labels[idx]
-        name = self.names[idx]
+#     def __getitem__(self, idx):
+#         input_id_item = self.input_ids[idx] if self.input_ids is not None else None
+#         attn_mask_item = self.attention_mask[idx] if self.attention_mask is not None else None
+#         emb_item = self.embs[idx] if self.embs is not None else None
+#         label = self.labels[idx]
+#         name = self.names[idx]
 
-        return input_id_item, attn_mask_item, label, name, emb_item
+#         return input_id_item, attn_mask_item, label, name, emb_item
     
 class ProteinDataset(Dataset):
     def __init__(self, names, labels, input_ids=None, attention_mask=None, embs=None):

@@ -9,97 +9,244 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict, Any, Union
 
+def get_embs_from_context_embs(
+    context_embs_esm,
+    attention_mask,
+    type_embs = "cls",
+    exclude_cls=True
+):
+    """
+    Extracts a sequence-level embedding from the transformer's contextualized
+    token embeddings using various pooling and aggregation strategies.
+
+    ATTNETION: Masking is applied for 'agg_mean' and 'agg_max' to ignore padding tokens.
+
+    Returns:
+        torch.Tensor: The aggregated embeddings. Shape: [batch_size, final_dim]
+                      or [batch_size, seq_len, hidden_size] for 'contextualized_embs'.
+    """
+
+    def masked_mean_pooling(embeddings, mask, exclude_cls=True):
+        """Computes mean pooling while ignoring padded tokens."""
+        
+        if exclude_cls:
+            # Exclude CLS token (position 0) from aggregation
+            embeddings = embeddings[:, 1:, :]
+            mask = mask[:, 1:]
+
+        # 1. Expand mask to match embedding dimensions: [B, S, H]
+        mask_expanded = mask.unsqueeze(-1).expand_as(embeddings).float()
+        
+        # 2. Sum the embeddings (numerator: zero out padded token embeddings)
+        sum_embeddings = torch.sum(embeddings * mask_expanded, dim=1)
+        
+        # 3. Sum the mask (denominator: count of non-padding tokens)
+        sum_mask = torch.sum(mask_expanded, dim=1)
+        
+        # 4. Prevent division by zero (e.g., in case of empty sequences)
+        sum_mask = torch.clamp(sum_mask, min=1e-9)
+        
+        # 5. Calculate the masked mean
+        return sum_embeddings / sum_mask
+
+    def masked_max_pooling(embeddings, mask, exclude_cls=True):
+        """Computes max pooling while ensuring padding tokens are ignored."""
+
+        if exclude_cls:
+            # Exclude CLS token (position 0) from aggregation
+            embeddings = embeddings[:, 1:, :]
+            mask = mask[:, 1:]
+
+        # 1. Expand mask to match embedding dimensions: [B, S, H]
+        mask_expanded = mask.unsqueeze(-1).expand_as(embeddings).float()
+        
+        # 2. Create a temporary copy to modify padding values
+        temp_embs = embeddings.clone()
+        
+        # 3. Set padding positions (where mask is 0) to a very small negative number
+        # This ensures they are ignored during the max operation.
+        temp_embs[mask_expanded == 0] = -1e9
+        
+        # 4. Perform max pooling
+        max_pool, _ = torch.max(temp_embs, dim=1)
+        return max_pool
+
+    # --- Aggregation Logic ---
+    
+    if type_embs in ["agg_mean", "concat(agg_mean, agg_max)", "concat(agg_mean, agg_max, cls)"]:
+        mean_pool = masked_mean_pooling(context_embs_esm, attention_mask, exclude_cls=exclude_cls)
+    
+    if type_embs in ["agg_max", "concat(agg_mean, agg_max)", "concat(agg_mean, agg_max, cls)"]:
+        max_pool = masked_max_pooling(context_embs_esm, attention_mask, exclude_cls=exclude_cls)
+
+    if type_embs == "agg_mean":
+        batch_embeddings = mean_pool
+        
+    elif type_embs == "agg_max":
+        batch_embeddings = max_pool
+        
+    elif type_embs == "cls":
+        batch_embeddings = context_embs_esm[:, 0, :] 
+        
+    elif type_embs == "concat(agg_mean, agg_max)":
+        batch_embeddings = torch.cat((mean_pool, max_pool), dim=1) 
+        
+    elif type_embs == "concat(agg_mean, agg_max, cls)":
+        batch_embeddings = torch.cat((mean_pool, max_pool, context_embs_esm[:, 0, :]), dim=1) 
+        
+    elif type_embs == "contextualized_embs":
+        # Returns the full sequence of embeddings for per-token tasks
+        batch_embeddings = context_embs_esm
+        
+    else:
+        raise ValueError(f"Unknown embedding type: {type_embs}")
+
+    return batch_embeddings
+
+
 class MeanPoolMSCNNHead(nn.Module):
     """
-    Processes the input embeddings (L x H) by:
-    1. Mean Pooling across the Hidden Dimension (H -> 1).
-    2. Applying parallel 1D convolutions (MSCNN) along the Sequence Length (L).
-    3. Global Max Pooling.
-    4. Final Classification MLP.
+    Multi-Scale CNN Head for 1D protein embeddings.
+    
+    Takes pre-aggregated embeddings (e.g., CLS token, mean/max pooled) and applies
+    multi-scale 1D convolutions to extract features at different receptive field sizes.
+    
+    Architecture:
+    1. Reshape 1D embedding into "pseudo-sequence" format
+    2. Apply parallel 1D convolutions with different kernel sizes
+    3. Global max pooling across each scale
+    4. Concatenate multi-scale features
+    5. Final MLP classifier
+    
+    Input: [Batch, Hidden_dim] - e.g., [32, 480]
+    Output: [Batch, num_classes] - e.g., [32, 2]
     """
+    
     def __init__(self,
-                 in_features_dim,                  # Original ESM hidden_dim (needed for initial mean pool)
-                 kernel_sizes = [3, 5, 7],         # Scales (ie kernel dimensions)
-                 num_filters_per_scale = 8,        # Number of filters PER SCALE (like having one filter wiht multiple channels)
-                 num_classes = 2,                  # Final output dim
-                 dropout_prob = 0.3):
+                 in_features_dim,                   # Input embedding dimension (e.g., 480)
+                 kernel_sizes=[3, 5, 7, 9],        # Different scales for feature extraction
+                 num_filters_per_scale=16,          # Filters per scale (increased from 8)
+                 num_classes=2,                     # Binary classification
+                 dropout_prob=0.3,
+                 use_residual=True):                # Add residual connection
         
         super(MeanPoolMSCNNHead, self).__init__()
-
+        
         self.in_features_dim = in_features_dim
         self.kernel_sizes = kernel_sizes
         self.num_scales = len(kernel_sizes)
         self.num_filters = num_filters_per_scale
         self.num_classes = num_classes
-
-        # The input channel dimension to the Conv1D layers will be 1 
-        # because of the mean pooling (H -> 1).
-        cnn_in_channels = 1 
-
+        self.use_residual = use_residual
+        
         # --- Multi-Scale Convolutional Branches ---
+        # Each branch processes the 1D embedding as a "sequence"
         self.conv_branches = nn.ModuleList()
+        
         for k_size in kernel_sizes:
-            # The Conv1D takes 1 input channel (the mean-pooled value)
             branch = nn.Sequential(
-                nn.Conv1d(in_channels=cnn_in_channels,
-                          out_channels=num_filters_per_scale,
-                          kernel_size=k_size,
-                          padding=k_size // 2), # 'same' padding
-                nn.GELU(),
+                # Treat embedding as 1 channel with in_features_dim length
+                nn.Conv1d(
+                    in_channels=1,                    # Single channel
+                    out_channels=num_filters_per_scale,
+                    kernel_size=k_size,
+                    padding=k_size // 2,              # Same padding
+                    bias=False                        # BatchNorm will handle bias
+                ),
                 nn.BatchNorm1d(num_filters_per_scale),
-                nn.Dropout(dropout_prob),
+                nn.GELU(),                            # GELU works better than ReLU
+                nn.Dropout(dropout_prob * 0.5),       # Light dropout after conv
             )
             self.conv_branches.append(branch)
-
-        # --- Classifier Block ---
-        # Input dimension is sum of pooled features: num_scales * num_filters_per_scale
-        classifier_input_dim = self.num_scales * num_filters_per_scale
         
+        # --- Feature Fusion ---
+        # Total features from all scales
+        total_conv_features = self.num_scales * num_filters_per_scale
+        
+        # Optional: Add residual connection from input
+        if use_residual:
+            # Project input to same dimension as conv features
+            self.residual_proj = nn.Sequential(
+                nn.Linear(in_features_dim, total_conv_features),
+                nn.LayerNorm(total_conv_features),
+                nn.GELU()
+            )
+            classifier_input_dim = total_conv_features  # After addition
+        else:
+            self.residual_proj = None
+            classifier_input_dim = total_conv_features
+        
+        # --- Classification MLP ---
+        # Deeper network to learn from multi-scale features
         self.classifier = nn.Sequential(
-            nn.Linear(classifier_input_dim, 32), # Reduced hidden size due to small filter count
-            nn.ReLU(),
+            nn.Linear(classifier_input_dim, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
             nn.Dropout(dropout_prob),
-            nn.Linear(32, num_classes)
+            
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.GELU(),
+            nn.Dropout(dropout_prob * 0.5),
+            
+            nn.Linear(128, 64),
+            nn.LayerNorm(64),
+            nn.GELU(),
+            
+            nn.Linear(64, num_classes)
         )
-
-    def forward(self, x, return_embs = False):
+    
+    def forward(self, x, return_embs=False):
         """
         Args:
-            x (torch.Tensor): Contextualized embeddings [B, L, H].
-        """
+            x (torch.Tensor): 1D protein embeddings [Batch, Hidden_dim]
+                             e.g., [32, 480] from CLS token or mean pooling
+            return_embs (bool): Whether to return intermediate embeddings
         
-        # 1. Mean Pooling (H -> 1): [B, L, H] -> [B, L, 1]
-        # This collapses the hidden dimension, retaining only the mean feature value per residue.
-        mean_pooled_x = torch.mean(x, dim=2, keepdim=True) 
-
-        # 2. Permute input for Conv1d: [B, L, 1] -> [B, 1, L]
-        # 1 is the channel dimension, L is the length dimension.
-        x_permuted = mean_pooled_x.permute(0, 2, 1)
-
+        Returns:
+            logits: [Batch, num_classes]
+            embs (optional): Dict of intermediate representations
+        """
+        batch_size = x.shape[0]
+        
+        # Store original for residual
+        x_original = x
+        
+        # 1. Reshape: [B, H] -> [B, 1, H]
+        # Treat the embedding as a 1D sequence with 1 channel
+        x = x.unsqueeze(1)  # [Batch, 1, Hidden_dim]
+        
+        # 2. Apply parallel multi-scale convolutions
         pooled_features_list = []
         
-        # 3. Process through parallel branches and pool
         for conv_branch in self.conv_branches:
+            # Conv output: [B, 1, H] -> [B, F, H]
+            # where F = num_filters_per_scale
+            conv_out = conv_branch(x)
             
-            # Conv output: [B, 1, L] -> [B, F, L]
-            conv_out = conv_branch(x_permuted) 
-            
-            # Global Max Pooling: [B, F, L] -> [B, F]
+            # Global max pooling: [B, F, H] -> [B, F]
+            # This extracts the most salient feature from each filter
             pooled_features = F.adaptive_max_pool1d(conv_out, 1).squeeze(2)
             pooled_features_list.append(pooled_features)
-
-        # 4. Concatenate pooled features: [B, S * F]
-        concat_pooled_features = torch.cat(pooled_features_list, dim=1) 
         
-        # 5. Classify
-        logits = self.classifier(concat_pooled_features)
-
-        # 6. Handle return_embs
+        # 3. Concatenate all scales: [B, num_scales * F]
+        concat_features = torch.cat(pooled_features_list, dim=1)
+        
+        # 4. Optional residual connection
+        if self.use_residual:
+            residual_features = self.residual_proj(x_original)
+            # Element-wise addition
+            concat_features = concat_features + residual_features
+        
+        # 5. Final classification
+        logits = self.classifier(concat_features)
+        
+        # 6. Return embeddings if requested
         if return_embs:
             embs = {
-                "mscnn_mean_pooled_signal": mean_pooled_x.squeeze(2), # The 1D signal (B x L)
-                "mscnn_concat_features": concat_pooled_features,     # The final feature vector (B x S*F)
-            } 
+                "mscnn_1d_concat_features": concat_features,  # [B, num_scales * F]
+                "mscnn_1d_per_scale": pooled_features_list,  # List of [B, F] per scale
+            }
             return logits, embs
         
         return logits
@@ -265,7 +412,6 @@ class MLPHead(nn.Module):
         return self.classifier(x)
 
 
-
 # Model = ESM + ClassificationHead
 class EsmDeepSec(nn.Module):
 
@@ -320,7 +466,7 @@ class EsmDeepSec(nn.Module):
         elif type_head == "LR":
             self.class_head = LogisticRegressionHead(in_features_dim=self.in_features_dim)
         elif type_head == "CNN":
-            pass            
+            self.class_head = MeanPoolMSCNNHead(in_features_dim=self.in_features_dim)           
 
 
     def forward(self, input_ids=None, attention_mask=None, return_embs=False, precomputed_embs=None):
@@ -345,24 +491,12 @@ class EsmDeepSec(nn.Module):
                 #hidden_states --> not jsut the last one
                 #attentions
 
-            # Define input to classfication head                   
-            if self.type_emb_for_classification == "agg_mean":
-                input_class_head = torch.mean(outputs_esm.last_hidden_state, dim=1)
-            elif self.type_emb_for_classification == "agg_max":
-                input_class_head, _ = torch.max(outputs_esm.last_hidden_state, dim=1)
-            elif self.type_emb_for_classification == "cls":
-                input_class_head = outputs_esm.last_hidden_state[:, 0, :] 
-            elif self.type_emb_for_classification == "concat(agg_mean, agg_max)":
-                mean_pool = torch.mean(outputs_esm.last_hidden_state, dim=1)
-                max_pool, _ = torch.max(outputs_esm.last_hidden_state, dim=1)
-                input_class_head = torch.cat((mean_pool, max_pool), dim=1) 
-            elif self.type_emb_for_classification == "concat(agg_mean, agg_max, cls)":
-                mean_pool = torch.mean(outputs_esm.last_hidden_state, dim=1)
-                max_pool, _ = torch.max(outputs_esm.last_hidden_state, dim=1)
-                cls = outputs_esm.last_hidden_state[:, 0, :] 
-                input_class_head = torch.cat((mean_pool, max_pool, cls), dim=1) 
-            elif self.type_emb_for_classification == "contextualized_embs":
-                input_class_head = outputs_esm.last_hidden_state # Shape: [batch, seq_len (with special tokens), hidden_dim]
+            input_class_head = get_embs_from_context_embs(
+                    context_embs_esm = outputs_esm.last_hidden_state,
+                    attention_mask=attention_mask,
+                    type_embs = self.type_emb_for_classification,
+                    exclude_cls=True
+                )
 
         else:
             input_class_head = precomputed_embs
@@ -380,7 +514,7 @@ class EsmDeepSec(nn.Module):
             if outputs_esm is not None:
                 embs["esm_mean"] = torch.mean(outputs_esm.last_hidden_state, dim=1)
                 embs["esm_max"] = torch.max(outputs_esm.last_hidden_state, dim=1)[0]
-                embs["esm_csl"] = outputs_esm.last_hidden_state[:, 0, :]
+                embs["esm_cls"] = outputs_esm.last_hidden_state[:, 0, :]
 
             # Add precomputed emb in case
             embs["precomputed_embs"] = precomputed_embs

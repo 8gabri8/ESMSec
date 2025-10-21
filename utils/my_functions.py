@@ -2,6 +2,8 @@
 from torch.optim import AdamW
 from torch import nn
 from torch.optim import lr_scheduler
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -175,6 +177,10 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     test_mcc_history = []
     test_last_eval = {}
 
+    # TODO:
+        # implement early stopping
+        # LR_schedulaer on VALIDATION set
+
 
     # read info
     device = config["DEVICE"]
@@ -183,11 +189,40 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     gamma = config["LR_DECAY_GAMMA"]
     num_epochs = config["NUM_EPOCHS"]
     eval_epoch_freq = config["EVAL_EPOCH_FREQ"]
+    l2_reg = config["L2_REG"]
+    min_lr=1e-7
 
-    # Initialise obj
-    optimizer = AdamW(net.class_head.parameters(), lr=lr) # ONLY train the classification head
-    exp_lr = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # step_size=N → the LR changes after step() has been called N times
-    #loss_fn = nn.CrossEntropyLoss() # binary classfication, needs logits
+    # --- Verify ESM is Frozen ---
+    if net.esm_model is not None:
+        assert all(not p.requires_grad for p in net.esm_model.parameters()), \
+            "ESM model parameters should be frozen!"
+        
+    # optimizer
+    optimizer = AdamW(net.class_head.parameters(), lr=lr, weight_decay=l2_reg) # ONLY train the classification head
+
+    # learning rate schefuler
+    #LR_scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # step_size=N → the LR changes after step() has been called N times
+    # LR_scheduler = lr_scheduler.CosineAnnealingLR(
+    #     optimizer, 
+    #     T_max=num_epochs, # Decay over the entire training duration
+    #     eta_min=1e-7,          # Don't go below this LR
+    # )
+    # LR_scheduler = ReduceLROnPlateau(
+    #     optimizer, 
+    #     mode='min',           # Change to 'min' since we are tracking loss
+    #     factor=gamma,         # Multiply LR by 0.5 when plateau detected
+    #     patience=10,          # Wait 10 evaluations before reducing LR
+    #     verbose=True,         # Print when LR changes
+    #     min_lr=min_lr,          # Don't go below this LR
+    #     threshold=5e-3,       # minimum change in the monitored quantity to qualify as an "improvement." If the loss improvement is smaller than this, it's considered a plateau.
+    #     threshold_mode='abs'  # Changed from 'rel' to 'abs' for fixed minimum improvement
+    # )
+    LR_scheduler = lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=20,          # Number of epochs for the first restart cycle
+        T_mult=2,         # Multiply T_0 by 2 after each restart (makes cycles grow)
+        eta_min=min_lr    # The minimum LR to anneal down to
+    )
 
     # Set model to training mode
     net.train()
@@ -198,19 +233,20 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
 
         net.train() # back to train mode
 
-        # Add LR as postfix
-        current_lr = exp_lr.get_last_lr()[0]
-        pbar_epochs.set_postfix(LR=f"{current_lr:.6f}")
-
         pbar = tqdm(train_dl, desc=f"Epoch {epoch_idx}", unit="train batch", position=1, leave=False)
 
+        # train natches
+        epoch_loss = torch.zeros(1, dtype=torch.float32, device=device)
+
         for batch in pbar:
-            
-            # unpack
-            seq, attention_mask, label, _, emb = batch
 
             # set model to trainign mode
             net.train()
+
+            # Add LR as postfix
+            # Update variable name here as well:
+            current_lr = LR_scheduler.optimizer.param_groups[0]['lr'] # Use .optimizer.param_groups[0]['lr'] for clean access
+            pbar_epochs.set_postfix(LR=f"{current_lr:.6f}")
 
             #move to device
             seq = batch.get("input_ids").to(device)
@@ -232,6 +268,9 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
             loss.backward()
             # paramers update
             optimizer.step()
+
+            # Track loss
+            epoch_loss += loss.item()
 
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
@@ -275,8 +314,12 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
             ### GPU monitoring
             #monitor_gpu_memory()
 
+        # average loss per batch
+        avg_epoch_loss = (epoch_loss / len(train_dl)).item()
+
         # increment learning rate decay counter PER EPOCH
-        exp_lr.step() # increments the internal counter
+        LR_scheduler.step() # increments the internal counter
+        #LR_scheduler.step(avg_epoch_loss)  #plteau
         #print(f"Epoch {epoch_idx}, New LR: {exp_lr.get_last_lr()[0]}")
 
     # claean up
