@@ -70,33 +70,40 @@ def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols
 
     return result
 
+def per_cluster_hypergeom_test(n_genes, n_genes_positive, total_genes, total_positive):
+    """
+    Tests if a cluster is enriched for positive genes using the hypergeometric test.
 
-def per_cluster_hypergeom_test(cluster_row, total_genes, total_positive):
+    Parameters
+    ----------
+    n_genes : int
+        Number of genes in the cluster (sample size).
+    n_genes_positive : int
+        Number of positive genes in the cluster (successes in sample).
+    total_genes : int
+        Total number of genes across all clusters (population size, M).
+    total_positive : int
+        Total number of positive genes across all clusters (successes in population, n).
+
+    Returns
+    -------
+    tuple (prob, p_value)
+        prob: Probability of observing exactly k positive genes (PMF)
+        p_value: One-tailed probability of observing ≥ k positives (1 - CDF)
     """
-    Tests if cluster is enriched for positive genes
-    
-    Parameters:
-    - cluster_row: row from dataframe with n_genes and n_genes_positive
-    - total_genes: total number of genes across all clusters
-    - total_positive: total number of positive genes across all clusters
-    """
-    # Hypergeometric parameters:
-    # M = total population size
-    # n = number of success states in population (positive genes)
-    # N = number of draws (genes in cluster)
-    
     M = total_genes
     n = total_positive
-    N = cluster_row['n_genes']
-    k = cluster_row['n_genes_positive']
-    
-    # One-tailed p-value (testing if cluster has MORE positive genes than expected)
+    N = n_genes
+    k = n_genes_positive
+
+    # One-tailed p-value (probability of ≥ k positives)
     p_value = 1 - hypergeom.cdf(k - 1, M, n, N)
-    
-    # Calculate probability of observing exactly k positive genes
+
+    # Exact probability for k positives
     prob = hypergeom.pmf(k, M, n, N)
-    
+
     return prob, p_value
+
 
 def sample_sampled_from_single_row(row, min_sample_n, prot_col, gene_col, probs_col):
 

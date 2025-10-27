@@ -137,7 +137,7 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
 
 
 def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
-                         class_palette=None, corr_palette=None):
+                         class_palette=None, corr_palette=None, point_size=5):
     """
     Plot UMAP embeddings for multiple embedding types with True/Pred/Correct info.
 
@@ -194,13 +194,13 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     for col_idx, (key, df) in enumerate(dfs.items()):
         # Row 0: True labels
         sns.scatterplot(x='UMAP1', y='UMAP2', hue='TrueClass', palette=class_palette,
-                        data=df, alpha=0.8, s=50, ax=axes[0, col_idx], legend=False)
+                        data=df, alpha=0.8, s=point_size, ax=axes[0, col_idx], legend=False)
         axes[0, col_idx].set_title(f"{key.replace('_', ' ').title()} - True Labels")
         axes[0, col_idx].grid(True, alpha=0.3)
 
         # Row 1: Predicted labels
         sns.scatterplot(x='UMAP1', y='UMAP2', hue='PredClass', palette=class_palette,
-                        data=df, alpha=0.8, s=50, ax=axes[1, col_idx], legend=False)
+                        data=df, alpha=0.8, s=point_size, ax=axes[1, col_idx], legend=False)
         axes[1, col_idx].set_title(f"{key.replace('_', ' ').title()} - Predicted Labels")
         axes[1, col_idx].grid(True, alpha=0.3)
 
@@ -209,9 +209,9 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
         df_wrong = df[df['CorrectStr'] == 'wrong']
 
         axes[2, col_idx].scatter(df_correct['UMAP1'], df_correct['UMAP2'],
-                                 c=corr_palette['correct'], alpha=0.6, s=40, label='correct', edgecolor='none')
+                                 c=corr_palette['correct'], alpha=0.6, s=point_size, label='correct', edgecolor='none')
         axes[2, col_idx].scatter(df_wrong['UMAP1'], df_wrong['UMAP2'],
-                                 c=corr_palette['wrong'], alpha=0.9, s=90, label='wrong', edgecolor='k', linewidth=0.4)
+                                 c=corr_palette['wrong'], alpha=0.9, s=point_size, label='wrong', edgecolor='k', linewidth=0.4)
         axes[2, col_idx].set_title(f"{key.replace('_', ' ').title()} - Correct vs Wrong")
         axes[2, col_idx].set_xlabel("UMAP 1")
         axes[2, col_idx].set_ylabel("UMAP 2")
@@ -230,32 +230,50 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     return dfs
 
 
-def plot_umap_clusters(df, uamo1_col='UMAP1', uamo2_col='UMAP2', cluster_col='Cluster_Label', title='UMAP Visualization with K-Means Clusters'):
+def plot_umap_clusters(df, umap1_col='UMAP1', umap2_col='UMAP2', 
+                       cluster_col='Cluster_Label', 
+                       title='UMAP Visualization with K-Means Clusters',
+                       point_size=100,
+                       label_clusters=True):  # Added flag for labeling
     """
-    Plots the UMAP coordinates, colored by the cluster assignment.
+    Plots the UMAP coordinates, colored by the cluster assignment,
+    and optionally labels each cluster at its centroid.
     
     Parameters:
     - df: The input DataFrame containing UMAP coordinates and cluster labels.
-    - uamo1_col: Name of the column for UMAP dimension 1.
-    - uamo2_col: Name of the column for UMAP dimension 2.
+    - umap1_col: Name of the column for UMAP dimension 1.
+    - umap2_col: Name of the column for UMAP dimension 2.
     - cluster_col: Name of the column with cluster labels.
     - title: Title for the plot.
+    - point_size: Size of the scatter plot markers (default: 100).
+    - label_clusters: Whether to show cluster labels on the plot (default: True).
     """
     plt.figure(figsize=(10, 8))
     
-    # Use seaborn.scatterplot for easy categorical coloring
+    # Scatter plot of UMAP points
     sns.scatterplot(
-        x=df[uamo1_col],
-        y=df[uamo2_col],
-        hue=df[cluster_col].astype(str), # Convert to string for discrete colors
-        palette='tab20',               # Color palette
-        s=50,                            # Marker size
-        alpha=0.8                        # Transparency
+        x=df[umap1_col],
+        y=df[umap2_col],
+        hue=df[cluster_col].astype(str),
+        palette='tab20',
+        s=point_size,
+        alpha=0.8
     )
     
+    # Label cluster centroids
+    if label_clusters:
+        centroids = df.groupby(cluster_col)[[umap1_col, umap2_col]].mean()
+        for cluster, (x, y) in centroids.iterrows():
+            plt.text(
+                x, y, str(cluster),
+                fontsize=12, fontweight='bold',
+                color='black', ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.6, edgecolor='gray', boxstyle='round,pad=0.3')
+            )
+    
     plt.title(title, fontsize=16)
-    plt.xlabel('UMAP Dimension 1 (uamo1)', fontsize=12)
-    plt.ylabel('UMAP Dimension 2 (uamo2)', fontsize=12)
+    plt.xlabel('UMAP Dimension 1', fontsize=12)
+    plt.ylabel('UMAP Dimension 2', fontsize=12)
     plt.legend(title='Cluster', loc='best', bbox_to_anchor=(1.05, 1))
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()

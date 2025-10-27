@@ -41,3 +41,7 @@ tar -xvzf 'Data_Neftel2019_Brain.tar.gz?rlkey=o8yru9vryof2ndpa0old3rhn1'
 
 wget https://www.weizmann.ac.il/sites/3CA/sites/sites.3CA/files/meta_programs_2025-01-29.xlsx
 ```
+
+### 5. InterProt domain
+
+Go to Unirpot and downlaod human rptoeins with the pfa and interprot annotawiton
