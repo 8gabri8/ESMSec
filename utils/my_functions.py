@@ -138,9 +138,9 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
             emb = batch.get("embs").to(device)
 
             if from_precomputed_embs:
-                output = net(precomputed_embs=emb)
+                output = net(precomputed_embs=emb, attention_mask=attention_mask)
             else:
-                output = net(seq, attention_mask=attention_mask) # seq --> [batch_size, 2], TOKENISEd protein sequences
+                output = net(seq, attention_mask=attention_mask)
 
             probs = torch.softmax(output, dim=-1)
             preds = torch.argmax(probs, dim=-1)
@@ -299,9 +299,9 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
                         
             # Forward apss
             if from_precomputed_embs:
-                output = net(precomputed_embs=emb)
+                output = net(precomputed_embs=emb, attention_mask=attention_mask)
             else:
-                output = net(seq, attention_mask=attention_mask) # seq --> [batch_size, 2], TOKENISEd protein sequences
+                output = net(seq, attention_mask=attention_mask)
 
             # compute loss
             loss = loss_fn(output, label) # crossEntripyLoss() expects RAW logits, so it is correct passing direclty "outpu"

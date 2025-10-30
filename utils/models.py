@@ -26,6 +26,8 @@ def get_embs_from_context_embs(
                       or [batch_size, seq_len, hidden_size] for 'contextualized_embs'.
     """
 
+    #assert (type_embs == "cls") and (exclude_cls==True), "Cannot exclude CLS token when type_embs is 'cls'."
+
     def masked_mean_pooling(embeddings, mask, exclude_cls=True):
         """Computes mean pooling while ignoring padded tokens."""
         
@@ -93,7 +95,20 @@ def get_embs_from_context_embs(
         
     elif type_embs == "concat(agg_mean, agg_max, cls)":
         batch_embeddings = torch.cat((mean_pool, max_pool, context_embs_esm[:, 0, :]), dim=1) 
-        
+
+    elif type_embs == "stacked_linearized_all":
+        # Flatten all amino acid embeddings (including padding)
+        # Zero-out padding embeddings but keep them in sequence
+        if exclude_cls:
+            context_embs_esm = context_embs_esm[:, 1:, :]
+            attention_mask = attention_mask[:, 1:]
+
+        mask_expanded = attention_mask.unsqueeze(-1).expand_as(context_embs_esm).float()
+        context_embs_esm = context_embs_esm * mask_expanded  # zero-out padding embeddings
+
+        # Flatten all embeddings (padding now zeroed)
+        batch_embeddings = context_embs_esm.reshape(context_embs_esm.size(0), -1)
+
     elif type_embs == "contextualized_embs":
         # Returns the full sequence of embeddings for per-token tasks
         batch_embeddings = context_embs_esm
@@ -214,19 +229,20 @@ class MeanPoolMSCNNHead(nn.Module):
         
         # 1. Reshape: [B, H] -> [B, 1, H]
         # Treat the embedding as a 1D sequence with 1 channel
-        x = x.unsqueeze(1)  # [Batch, 1, Hidden_dim]
+        x = x.unsqueeze(1)  # [Batch, 1, Hidden_dim] --> "very thin image"
         
         # 2. Apply parallel multi-scale convolutions
         pooled_features_list = []
         
         for conv_branch in self.conv_branches:
             # Conv output: [B, 1, H] -> [B, F, H]
+            # padding to have final H shape
             # where F = num_filters_per_scale
             conv_out = conv_branch(x)
             
             # Global max pooling: [B, F, H] -> [B, F]
             # This extracts the most salient feature from each filter
-            pooled_features = F.adaptive_max_pool1d(conv_out, 1).squeeze(2)
+            pooled_features = F.adaptive_max_pool1d(conv_out, 1).squeeze(2) #adaptive_avg_pool1d()
             pooled_features_list.append(pooled_features)
         
         # 3. Concatenate all scales: [B, num_scales * F]
@@ -243,18 +259,97 @@ class MeanPoolMSCNNHead(nn.Module):
         
         # 6. Return embeddings if requested
         if return_embs:
+            # Stack pooled features into one tensor: [B, num_scales, F]
+            per_scale_tensor = torch.stack(pooled_features_list, dim=1)
+
             embs = {
-                "mscnn_1d_concat_features": concat_features,  # [B, num_scales * F]
-                "mscnn_1d_per_scale": pooled_features_list,  # List of [B, F] per scale
+                "mscnn_1d_concat_features": concat_features,   # [B, num_scales * F]
+                "mscnn_1d_per_scale": per_scale_tensor,        # [B, num_scales, F]
             }
             return logits, embs
         
         return logits
 
 
+class GatingTransformerHead(nn.Module):
+
+    def __init__(self, in_features_dim=480, num_heads=8, dropout=0.3):
+        super(GatingTransformerHead, self).__init__()
+
+        self.in_features_dim = in_features_dim
+        self.num_heads = num_heads
+
+        assert in_features_dim % num_heads == 0, \
+            "Number of attention heads must divide hidden dim."
+
+        # --- Multi-head self-attention ---
+        self.attention_layer = nn.MultiheadAttention(
+            embed_dim=in_features_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True  # allows [B, S, H]
+        )
+
+        # --- Layer normalization ---
+        self.layer_norm = nn.LayerNorm(in_features_dim)
+
+        # --- Simple MLP classifier ---
+        self.classifier = nn.Sequential(
+            nn.Linear(in_features_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(128, 2)  # binary classification
+        )
+
+    def forward(self, x, attention_mask=None, return_embs=False):
+        """
+        Args:
+            x: [batch_size, seq_len, hidden_dim]
+            return_embs (bool): whether to return intermediate embeddings
+        """
+
+        # Create key_padding_mask for MultiheadAttention
+        # Note: key_padding_mask uses True for PADDING tokens
+        key_padding_mask = (attention_mask == 0)  # [B, S]
+
+        # --- Compute attention ---
+        # MultiheadAttention with batch_first=True expects [B, S, H]
+        attn_out, attn_weights = self.attention_layer(x, x, x, key_padding_mask=key_padding_mask, need_weights=True)  
+        # attn_out: [B, S, H]
+        # attn_weights: [B, S, S] when batch_first=True and averaged over heads
+
+        # --- Residual + LayerNorm ---
+        out = self.layer_norm(x + attn_out)
+
+        # --- Compute per-token attention importance ---
+        # attn_weights is already [B, S, S] (averaged over heads by default)
+        # Average over the key dimension to get importance per query token
+        token_importance = attn_weights.mean(dim=-1)  # [B, S]
+        attn_scores = F.softmax(token_importance, dim=-1).unsqueeze(-1)  # [B, S, 1]
+
+        # --- Weighted average pooling ---
+        weighted_avg = torch.sum(out * attn_scores, dim=1)  # [B, H]
+
+        # --- Classifier ---
+        logits = self.classifier(weighted_avg)  # [B, 2]
+
+        if return_embs:
+            embs = {
+                "weighted_attention_scores": attn_scores.squeeze(-1).detach(),  # [B, S]
+                "weighted_avg_embedding": weighted_avg.detach(),                # [B, H]
+                #"attended_sequence": out.detach(),                              # [B, S, H]
+            }
+            return logits, embs
+
+        return logits
+
+
 class AttentionClassificationHead(nn.Module):
 
-    def __init__(self, in_features_dim = 480, num_heads = 8):
+    def __init__(self, in_features_dim = 480, num_heads = 8, dropout=0.3):
         super(AttentionClassificationHead, self).__init__() 
 
         self.in_features_dim = in_features_dim
@@ -262,7 +357,12 @@ class AttentionClassificationHead(nn.Module):
         assert in_features_dim % num_heads == 0, "Number of attnetion heads must be multiple of the hidden dimension."
 
         # initialise multi-head attention layer
-        self.attention_layer = nn.MultiheadAttention(embed_dim=in_features_dim, num_heads=num_heads)  
+        self.attention_layer = nn.MultiheadAttention(
+            embed_dim=in_features_dim, 
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True  # allows [B, S, H]
+            )  
 
         # initialize layer normalization layers
         self.layer_norm = nn.LayerNorm(in_features_dim)
@@ -290,23 +390,21 @@ class AttentionClassificationHead(nn.Module):
         )
     
 
-    def forward(self, x, return_embs=False):
-        
-        # permute: [batch_size, seq_len, hidden_dim] --> [seq_len, batch, hidden_dim] (needed by attention layer)
-        input_tensor = x.permute(1, 0, 2)
+    def forward(self, x, attention_mask=None, return_embs=False):
+
+        # Create key_padding_mask for MultiheadAttention
+        # Note: key_padding_mask uses True for PADDING tokens
+        key_padding_mask = (attention_mask == 0)  # [B, S]
 
         # compute SELF attention (Q,K,V are all the same)
-        output_tensor, _ = self.attention_layer(input_tensor, input_tensor, input_tensor)
-
-        # return to original shape
-        out = output_tensor.permute(1, 0, 2)
+        out, _ = self.attention_layer(x, x, x, key_padding_mask=key_padding_mask)
 
         # Skip connections (the block only needs to learn the residual change to apply, not totally new rep)
         residual_output = x + out
         # layer normalization: center the emb of each residue using the values of THAT residue
         out = self.layer_norm(residual_output)
 
-        # Run FFNN (mix info PER token)
+        # Run FFNN (mix info PER token), FFNN acts independently on each token embedding
         ffnn_out = self.ffnn(out)
 
         # Skip connection + layer normalization
@@ -314,9 +412,24 @@ class AttentionClassificationHead(nn.Module):
         out = self.ffnn_layer_norm(ffnn_output)
 
         # store emb to access later if needed
-        avg_pool = torch.mean(out, dim=1)      # [batch, hidden]
-        max_pool, _ = torch.max(out, dim=1)    # [batch, hidden]
-        cls_repr = out[:, 0, :]                # take CLS token before pooling [batch, hidden]
+        avg_pool = get_embs_from_context_embs(
+            context_embs_esm=out,
+            attention_mask=attention_mask,
+            type_embs = "agg_mean",
+            exclude_cls=True
+        )
+        max_pool = get_embs_from_context_embs(
+            context_embs_esm=out,
+            attention_mask=attention_mask,
+            type_embs = "agg_max",
+            exclude_cls=True
+        )
+        cls_repr = get_embs_from_context_embs(
+            context_embs_esm=out,
+            attention_mask=attention_mask,
+            type_embs = "cls",
+            exclude_cls=True
+        )
 
         # concatenate
         concat_out = torch.cat((avg_pool, max_pool), dim=1)  # [batch, 2*hidden]
@@ -418,8 +531,25 @@ class EsmDeepSec(nn.Module):
     def __init__(self, esm_model=None, type_head="attention", type_emb_for_classification="contextualized_embs", from_precomputed_embs=False, precomputed_embs_dim=None):
         super(EsmDeepSec, self).__init__()
 
+        # # Add validation after initializing in_features_dim
+        # valid_combinations = {
+        #     "attention": ["contextualized_embs"],
+        #     "gating_transformer": ["contextualized_embs"],
+        #     "MLP": ["agg_mean", "agg_max", "cls", "concat(agg_mean, agg_max)", 
+        #             "concat(agg_mean, agg_max, cls)", "stacked_linearized_all"],
+        #     "CNN": ["agg_mean", "agg_max", "cls", "concat(agg_mean, agg_max)", 
+        #             "concat(agg_mean, agg_max, cls)"],
+        #     "LR": ["agg_mean", "agg_max", "cls", "concat(agg_mean, agg_max)", 
+        #         "concat(agg_mean, agg_max, cls)"]
+        # }
+
+        # if not self.from_precomputed_embs:
+        #     assert type_emb_for_classification in valid_combinations[type_head], \
+        #         f"Invalid combination: {type_head} head requires embeddings from " \
+        #         f"{valid_combinations[type_head]}, got '{type_emb_for_classification}'"
+
         # Check head type
-        types_head = ["attention", "MLP", "CNN", "LR"]
+        types_head = ["attention", "MLP", "CNN", "LR", "gating_transformer"]
         assert type_head in types_head, f"type_head must be one of {types_head}"
         self.type_head = type_head
 
@@ -466,7 +596,9 @@ class EsmDeepSec(nn.Module):
         elif type_head == "LR":
             self.class_head = LogisticRegressionHead(in_features_dim=self.in_features_dim)
         elif type_head == "CNN":
-            self.class_head = MeanPoolMSCNNHead(in_features_dim=self.in_features_dim)           
+            self.class_head = MeanPoolMSCNNHead(in_features_dim=self.in_features_dim)    
+        elif type_head == "gating_transformer":
+            self.class_head = GatingTransformerHead(in_features_dim=self.in_features_dim)       
 
 
     def forward(self, input_ids=None, attention_mask=None, return_embs=False, precomputed_embs=None):
@@ -477,6 +609,7 @@ class EsmDeepSec(nn.Module):
         if self.from_precomputed_embs:
             assert precomputed_embs is not None, "precomputed_embs must be provided when from_precomputed_embs=True."
 
+        # need to calculte ESM emb
         if not self.from_precomputed_embs:
 
             with torch.no_grad(): # Avoid compute gradient on mpdel part that will not be trained
@@ -507,7 +640,12 @@ class EsmDeepSec(nn.Module):
             embs = {}
 
             # For sure calculare head embs
-            logits, class_head_emb = self.class_head(input_class_head, return_embs=return_embs) # [batch_size, 2]
+            if self.type_head in ["attention", "gating_transformer"]:
+                logits, class_head_emb = self.class_head(input_class_head, attention_mask=attention_mask, return_embs=return_embs)
+            else:
+                logits, class_head_emb = self.class_head(input_class_head, return_embs=return_embs)
+            
+            # sasve embs
             embs["class_head_embs"] =  class_head_emb
             
             # Add ESM embeddings ONLY if the ESM model was used
@@ -522,5 +660,7 @@ class EsmDeepSec(nn.Module):
             return logits, embs
 
         # pass thugh class head
-        return self.class_head(input_class_head) # [batch_size, 2]
-
+        if self.type_head in ["attention", "gating_transformer"]:
+            return self.class_head(input_class_head, attention_mask=attention_mask)
+        else:
+            return self.class_head(input_class_head)

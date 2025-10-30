@@ -54,11 +54,10 @@ def extract_embeddings(net, dl, device, cls_index=0, return_numpy=True, from_pre
 
         # Forward pass with return_embs=True
         if from_precomputed_embs:
-            logits, embs = net(precomputed_embs=emb, return_embs=True) 
+            logits, embs = net(precomputed_embs=emb, attention_mask=attention_mask, return_embs=True) 
         else:
             logits, embs = net(seq, attention_mask=attention_mask, return_embs=True)  # seq --> [batch_size, 2], TOKENISEd protein sequences
 
-        
         probs = torch.softmax(logits, dim=-1)
         preds = torch.argmax(probs, dim=-1)
 
@@ -118,6 +117,9 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
 
         if emb is None:
             print(f"Skipping {key}: embedding is None")
+            continue
+        if len(emb.shape) !=2:
+            print(f"Skipping {key}: embedding is not 2D (ie samples x dim) (shape: {emb.shape})")
             continue
 
         print(f"Computing UMAP for {key} with shape {emb.shape if emb is not None else None}...")
