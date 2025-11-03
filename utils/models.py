@@ -480,8 +480,11 @@ class LogisticRegressionHead(nn.Module):
         return logits
     
 
+import torch
+import torch.nn as nn
+
 class MLPHead(nn.Module):
-    def __init__(self, in_features_dim=480, dropout_prob=0.5):
+    def __init__(self, in_features_dim=480, num_classes=2, dropout_prob=0.5):
         super(MLPHead, self).__init__()
 
         self.layer1 = nn.Sequential(
@@ -504,25 +507,22 @@ class MLPHead(nn.Module):
             nn.ReLU()
         )
         
-        self.classifier = nn.Linear(32, 2)
+        self.classifier = nn.Linear(32, num_classes)
 
     def forward(self, x, return_embs=False):
+        h1 = self.layer1(x)
+        h2 = self.layer2(h1)
+        h3 = self.layer3(h2)
+        logits = self.classifier(h3)
+
         if return_embs:
-            h1 = self.layer1(x)
-            h2 = self.layer2(h1)
-            h3 = self.layer3(h2)
-            logits = self.classifier(h3)
-            
             embs = {
-                'mlp_layer3': h3   # [batch, 32] - most useful for visualization
+                'mlp_layer3': h3   # [batch, 32] - useful for visualization or downstream tasks
             }
             return logits, embs
         
-        # Normal forward pass
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        return self.classifier(x)
+        return logits
+
 
 
 # Model = ESM + ClassificationHead

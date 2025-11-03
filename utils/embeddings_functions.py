@@ -97,7 +97,7 @@ def extract_embeddings(net, dl, device, cls_index=0, return_numpy=True, from_pre
     return results, names_list, np.array(labels_list), np.array(preds_list)
 
 
-def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_state=None):
+def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_state=42):
     """
     Compute 2D UMAP projections for each embedding type and return as tensors.
 

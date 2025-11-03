@@ -6,6 +6,8 @@ import pandas as pd
 from collections import defaultdict
 from scipy.stats import hypergeom, binom
 import numpy as np
+from tqdm import tqdm
+
 
 
 def load_json_folder_to_df(folder_path):
@@ -46,28 +48,65 @@ def load_json_folder_to_df(folder_path):
     return df
 
 
-def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols", split_symbol=","):
+# def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols", split_symbol=",", subset_genes=None):
+#     """
+#     Create a new DataFrame showing each gene and how many gene sets it appears in.
+#     """
+#     gene_to_sets = defaultdict(set) #dictionary where each key is a gene-name and each value is a set of gene-set names it appears in.
+
+#     for _, row in df.iterrows():
+#         set_name = row[geneset_col_name]
+#         genes = row[genes_col_name]
+#         # make sure genes is iterable (list)
+#         if isinstance(genes, str):
+#             genes = [g.strip() for g in genes.split(split_symbol) if g.strip()]
+#         for g in genes: #For each gene, add the current set name to that gene’s set in gene_to_sets
+#             if (subset_genes is not None) and (g not in subset_genes):
+#                 continue
+#             gene_to_sets[g].add(set_name)
+#                 # defaultdict() --> if g doesn’t exist as a key yet, Python automatically creates an empty set for it
+
+#     # build new DataFrame
+#     result = pd.DataFrame(
+#         [(gene, len(sets)) for gene, sets in gene_to_sets.items()],
+#         columns=["gene", "geneset_count"]
+#     ).sort_values("geneset_count", ascending=False).reset_index(drop=True)
+
+#     return result
+
+def gene_set_counts(df, geneset_col_name="set_name", genes_col_name="geneSymbols", split_symbol=",", subset_genes=None):
     """
     Create a new DataFrame showing each gene and how many gene sets it appears in.
     """
-    gene_to_sets = defaultdict(set) #dictionary where each key is a gene-name and each value is a set of gene-set names it appears in.
-
-    for _, row in df.iterrows():
-        set_name = row[geneset_col_name]
-        genes = row[genes_col_name]
-        # make sure genes is iterable (list)
+    gene_to_sets = defaultdict(set)
+    
+    # Convert subset_genes to set for O(1) lookups
+    if subset_genes is not None:
+        subset_genes = set(subset_genes)
+    
+    # Vectorized approach with progress bar
+    for set_name, genes in tqdm(zip(df[geneset_col_name], df[genes_col_name]), 
+                                 total=len(df), 
+                                 desc="Processing gene sets"):
+        # Handle string splitting
         if isinstance(genes, str):
-            genes = [g.strip() for g in genes.split(split_symbol) if g.strip()]
-        for g in genes: #For each gene, add the current set name to that gene’s set in gene_to_sets
+            gene_list = [g.strip() for g in genes.split(split_symbol) if g.strip()]
+        else:
+            gene_list = genes
+        
+        # Filter and add to dictionary
+        if subset_genes is not None:
+            gene_list = [g for g in gene_list if g in subset_genes]
+        
+        for g in gene_list:
             gene_to_sets[g].add(set_name)
-                # defaultdict() --> if g doesn’t exist as a key yet, Python automatically creates an empty set for it
-
-    # build new DataFrame
+    
+    # Build result DataFrame
     result = pd.DataFrame(
         [(gene, len(sets)) for gene, sets in gene_to_sets.items()],
         columns=["gene", "geneset_count"]
     ).sort_values("geneset_count", ascending=False).reset_index(drop=True)
-
+    
     return result
 
 def per_cluster_hypergeom_test(n_genes, n_genes_positive, total_genes, total_positive):

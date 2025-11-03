@@ -9,7 +9,7 @@ data_paths:
   human_proteome_uniprot: /home/gdallagl/myworkdir/ESMSec/data/UniProt/human_proteome.tsv
   uniprot_mapping_id: /home/gdallagl/myworkdir/ESMSec/data/UniRef50/HUMAN_9606_idmapping.dat
   interprot_domains: /home/gdallagl/myworkdir/ESMSec/data/UniProt/uniprot_InterProt_domains.tsv
-  final_dataset: neftel/nucleolus_final_dataset.csv #/home/gdallagl/myworkdir/ESMSec/data/cell_cycle/datasets/cc_dataset_final.csv
+  final_dataset: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/datasets/cc_dataset_final.csv
 
 dataset_creation:
   min_freq_to_be_positive_gene: 3

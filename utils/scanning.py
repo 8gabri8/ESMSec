@@ -99,7 +99,8 @@ def multi_aa_scanning_final(model,
                             substitute_aas,
                             window_size,
                             normalise_true_substitution=False,
-                            device="cuda"):
+                            device="cuda",
+                            batch_size=64):
     """
     Final part of multi-AA scanning: evaluates pre-generated mutated sequences
     and computes delta probabilities per position and amino acid.
@@ -139,7 +140,7 @@ def multi_aa_scanning_final(model,
     # --- Evaluate all mutated sequences ---
     mutated_dl = my_dataset.create_dataloader(
         cache_mutations,
-        batch_size=64,  # adjust if needed
+        batch_size=batch_size,  
         shuffle=False
     )
 
