@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import torch
 import matplotlib.patches as mpatches
+import scanpy as sc
 
 
 
@@ -280,3 +281,127 @@ def plot_umap_clusters(df, umap1_col='UMAP1', umap2_col='UMAP2',
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.tight_layout()
     plt.show()
+
+
+def plot_embeddings(adata, basis, color, title=None, size=10, palette=None, 
+                   groups=None, legend_loc=None, ncols=None, figsize=None, **kwargs):
+    """
+    Plot multiple embeddings in a single figure.
+    
+    Parameters:
+    -----------
+    adata : AnnData
+        Annotated data object
+    basis : str or list
+        Embedding basis/bases (e.g., "X_umap_PCA" or ["X_umap_PCA", "X_umap_all"])
+    color : str or list
+        Color variable(s) - if single value, shared across all plots
+    title : str or list, optional
+        Title(s) - if single value, shared across all plots
+    size : int or list, optional
+        Point size(s) - if single value, shared across all plots
+    palette : str/list or list of str/list, optional
+        Color palette(s) - if single value, shared across all plots
+    groups : list of lists, optional
+        Groups to plot for each embedding. Each element can be:
+        - None: plot all groups
+        - list: plot only these groups (e.g., ['0', '1', '2'])
+        If single list provided, shared across all plots
+    legend_loc : str or list, optional
+        Legend location(s) - e.g., 'right margin', 'on data', 'none'
+        If single value, shared across all plots
+    ncols : int, optional
+        Number of columns (default: all plots in one row)
+    figsize : tuple, optional
+        Figure size (default: auto-calculated)
+    **kwargs : dict
+        Additional arguments passed to sc.pl.embedding
+    
+    Returns:
+    --------
+    fig, axes : matplotlib figure and axes objects
+    """
+    import numpy as np
+    
+    # Convert single values to lists
+    basis_list = [basis] if isinstance(basis, str) else list(basis)
+    n_plots = len(basis_list)
+    
+    # Handle shared vs individual parameters with validation
+    def _listify(param, n, param_name):
+        if param is None:
+            return [None] * n
+        elif isinstance(param, (list, tuple)):
+            param_list = list(param)
+            
+            # Check if it's a list of lists (for groups parameter)
+            if param_name == 'groups' and len(param_list) > 0:
+                # If first element is not a list/None, treat entire list as single groups value
+                if not isinstance(param_list[0], (list, type(None))):
+                    return [param_list] * n
+            
+            if len(param_list) != n and len(param_list) != 1:
+                print(f"Warning: {param_name} has {len(param_list)} values but {n} plots. "
+                      f"Using first {n} values or padding with last value.")
+            # If single value in list, expand it
+            if len(param_list) == 1:
+                return param_list * n
+            # If too many values, truncate
+            elif len(param_list) > n:
+                return param_list[:n]
+            # If too few values, pad with the last value
+            else:
+                return param_list + [param_list[-1]] * (n - len(param_list))
+        else:
+            # Single scalar value - broadcast to all
+            return [param] * n
+    
+    color_list = _listify(color, n_plots, 'color')
+    title_list = _listify(title, n_plots, 'title')
+    size_list = _listify(size, n_plots, 'size')
+    palette_list = _listify(palette, n_plots, 'palette')
+    groups_list = _listify(groups, n_plots, 'groups')
+    legend_loc_list = _listify(legend_loc, n_plots, 'legend_loc')
+    
+    # Set up subplot layout
+    if ncols is None:
+        ncols = n_plots
+    nrows = (n_plots + ncols - 1) // ncols
+    
+    if figsize is None:
+        figsize = (5 * ncols, 5 * nrows)
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+    
+    # Plot each embedding
+    for i, (b, c, t, s, p, g, ll) in enumerate(zip(basis_list, color_list, title_list, 
+                                                     size_list, palette_list, groups_list,
+                                                     legend_loc_list)):
+        plot_kwargs = kwargs.copy()
+        if p is not None:
+            plot_kwargs['palette'] = p
+        if g is not None:
+            plot_kwargs['groups'] = g
+        if ll is not None:
+            plot_kwargs['legend_loc'] = ll
+        
+        #print(f"Plotting {i+1}/{n_plots}: basis={b}, color={c}, size={s}, groups={g}, legend_loc={ll}")  # Debug
+        
+        sc.pl.embedding(
+            adata,
+            basis=b,
+            color=c,
+            title=t,
+            size=s,
+            ax=axes[i],
+            show=False,
+            **plot_kwargs
+        )
+    
+    # Hide extra subplots
+    for j in range(n_plots, len(axes)):
+        axes[j].axis('off')
+    
+    plt.tight_layout()
+    return fig, axes

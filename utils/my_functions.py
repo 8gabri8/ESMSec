@@ -9,13 +9,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import trange, tqdm
 import numpy as np
-from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef, classification_report, confusion_matrix
+from sklearn.metrics import f1_score, balanced_accuracy_score, matthews_corrcoef, classification_report, confusion_matrix, roc_auc_score
 from scipy.ndimage import gaussian_filter1d
 from tqdm import tqdm
 from tqdm.notebook import tqdm, trange
 import random
 import yaml
 import os
+import requests
 
 def set_all_seeds(seed_value=42):
     """
@@ -150,9 +151,17 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
             total_correct += (preds == label).sum()
 
             all_probs.append(probs.cpu())
-            all_probs_class1.append(probs.cpu()[:, 1])
             all_labels.append(label.cpu())
             all_preds.append(preds.cpu())
+
+            # Attention mutiplcass
+            if probs.shape[1] == 2:
+                # Binary classification: keep class 1 probabilities
+                all_probs_class1.append(probs.cpu()[:, 1])
+            else:
+                # Multiclass: you need to specify which class to track
+                # Track a specific class (e.g., class 1)
+                all_probs_class1.append(probs.cpu()[:, 1])
 
     # average loss per batch
     avg_loss = (total_loss / len(dl)).item()
@@ -170,16 +179,44 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
     preds_np = all_preds.numpy()
 
     ### Calculate additional metrics
-    # F1 Score (binary or weighted for multiclass)
-    f1 = f1_score(labels_np, preds_np, average='binary' if len(torch.unique(all_labels)) == 2 else 'weighted', zero_division=0)
+    # F1 Score
+    #f1 = f1_score(labels_np, preds_np, average='binary' if len(torch.unique(all_labels)) == 2 else 'weighted', zero_division=0)
+    f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0)  # takes the average of these per-class F1-scores, weighted by the number of true instances in each class
     # Balanced Accuracy
     balanced_acc = balanced_accuracy_score(labels_np, preds_np)
     # Matthews Correlation Coefficient
     mcc = matthews_corrcoef(labels_np, preds_np)
 
+    ### Calculate AUC
+    # AUC requires probability scores, not just predictions
+    # For binary: use class 1 probabilities
+    # For multiclass: use one-vs-rest (OVR) or one-vs-one (OVO)
+
+    try:
+        if net.num_classes == 2:
+            # Binary classification: use probabilities of positive class
+            auc = roc_auc_score(labels_np, all_probs[:, 1].numpy())
+        else:
+            # Multiclass: use one-vs-rest with all class probabilities
+            # Check if we have at least 2 classes in the current split
+            unique_labels = np.unique(labels_np)
+            if len(unique_labels) >= 2:
+                auc = roc_auc_score(
+                    labels_np, 
+                    all_probs.numpy(), 
+                    multi_class='ovr',  # One-vs-Rest
+                    average='weighted'   # Weight by support
+                )
+            else:
+                auc = float('nan')  # Not enough classes to compute AUC
+    except ValueError as e:
+        # Handle edge cases (e.g., only one class present)
+        auc = float('nan')
+        print(f"Warning: Could not compute AUC - {e}")
+
     if verbose:
         print(f"\t{split_name} set: Loss: {avg_loss:.4f}, Acc: {avg_acc*100:.2f}%, "
-          f"Balanced Acc: {balanced_acc*100:.2f}%, F1: {f1:.4f}, MCC: {mcc:.4f}")
+            f"Balanced Acc: {balanced_acc*100:.2f}%, F1: {f1:.4f}, MCC: {mcc:.4f}, AUC: {auc:.4f}")
 
     return {
         "loss": avg_loss,
@@ -187,6 +224,7 @@ def evaluate_model(net, dl, device, loss_fn=None, split_name="Eval", verbose=Tru
         "balanced_accuracy": balanced_acc,
         "f1": f1,
         "mcc": mcc,
+        "auc": auc,  
         "probs": all_probs,
         "probs_class1": all_probs_class1,
         "labels": all_labels,
@@ -202,6 +240,7 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     train_balanced_acc_history = []
     train_f1_history = []
     train_mcc_history = []
+    train_auc_history = []
     train_last_eval = {}
 
     # Validation
@@ -210,6 +249,7 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     valid_balanced_acc_history = []
     valid_f1_history = []
     valid_mcc_history = []
+    valid_auc_history = []
     valid_last_eval = {}
 
     # Test
@@ -218,6 +258,7 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     test_balanced_acc_history = []
     test_f1_history = []
     test_mcc_history = []
+    test_auc_history = []
     test_last_eval = {}
 
     # TODO:
@@ -336,18 +377,21 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
             train_balanced_acc_history.append(train_metrics["balanced_accuracy"])
             train_f1_history.append(train_metrics["f1"])
             train_mcc_history.append(train_metrics["mcc"])
+            train_auc_history.append(train_metrics["auc"])
 
             valid_loss_history.append(valid_metrics["loss"])
             valid_acc_history.append(valid_metrics["accuracy"])
             valid_balanced_acc_history.append(valid_metrics["balanced_accuracy"])
             valid_f1_history.append(valid_metrics["f1"])
             valid_mcc_history.append(valid_metrics["mcc"])
+            valid_auc_history.append(valid_metrics["auc"])
 
             test_loss_history.append(test_metrics["loss"])
             test_acc_history.append(test_metrics["accuracy"])
             test_balanced_acc_history.append(test_metrics["balanced_accuracy"])
             test_f1_history.append(test_metrics["f1"])
             test_mcc_history.append(test_metrics["mcc"])
+            test_auc_history.append(test_metrics["auc"])
 
             # Save last evaluation results
             train_last_eval = train_metrics
@@ -372,34 +416,64 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
         # Train
         train_loss_history,
         train_acc_history,
+        train_balanced_acc_history,
+        train_f1_history,
+        test_mcc_history, 
+        train_auc_history,
         train_last_eval,
         
         # Validation
         valid_loss_history,
         valid_acc_history,
+        valid_balanced_acc_history,
+        valid_f1_history,
+        valid_mcc_history, 
+        valid_auc_history,
         valid_last_eval,
         
         # Test
         test_loss_history,
         test_acc_history,
+        test_balanced_acc_history, 
+        test_f1_history,
+        test_mcc_history,
+        test_auc_history,
         test_last_eval
     ) 
 
-def summarize_training(
-    train_loss_history, train_acc_history, train_last_eval,
-    valid_loss_history, valid_acc_history, valid_last_eval,
-    test_loss_history, test_acc_history, test_last_eval
+
+
+def summarize_results(
+    training_output,
+    num_classes=2,
+    plot_train=True,
+    plot_val=False,
+    plot_test=True
 ):
     """
     Comprehensive summary of training with multiple metrics, visualizations, and confusion matrices.
     
     Args:
-        *_loss_history: List of loss values at each evaluation step
-        *_acc_history: List of accuracy values at each evaluation step
-        *_last_eval: Dictionary containing final evaluation metrics including:
-            - loss, accuracy, balanced_accuracy, f1, mcc
-            - probs, labels, pred_labels (tensors)
+        training_output: Tuple containing all training histories and evaluation results
+            (train_loss_history, train_acc_history, train_balanced_acc_history, train_f1_history,
+             train_mcc_history, train_auc_history, train_last_eval,
+             valid_loss_history, valid_acc_history, valid_balanced_acc_history, valid_f1_history,
+             valid_mcc_history, valid_auc_history, valid_last_eval,
+             test_loss_history, test_acc_history, test_balanced_acc_history, test_f1_history,
+             test_mcc_history, test_auc_history, test_last_eval)
+        num_classes: Number of classes in classification task
+        plot_train: Whether to plot training data
+        plot_val: Whether to plot validation data
+        plot_test: Whether to plot test data
     """
+    
+    # Unpack the training output tuple
+    (train_loss_history, train_acc_history, train_balanced_acc_history, train_f1_history,
+     train_mcc_history, train_auc_history, train_last_eval,
+     valid_loss_history, valid_acc_history, valid_balanced_acc_history, valid_f1_history,
+     valid_mcc_history, valid_auc_history, valid_last_eval,
+     test_loss_history, test_acc_history, test_balanced_acc_history, test_f1_history,
+     test_mcc_history, test_auc_history, test_last_eval) = training_output
     
     # ============================================================================
     # SECTION 1: Comprehensive Metrics Table
@@ -408,49 +482,93 @@ def summarize_training(
     print(" "*25 + "FINAL EVALUATION METRICS")
     print("="*80)
     
-    metrics_table = [
-        ["Metric", "Train", "Validation", "Test"],
-        ["-"*15, "-"*15, "-"*15, "-"*15],
-        ["Loss", 
-         f"{train_last_eval['loss']:.4f}",
-         f"{valid_last_eval['loss']:.4f}",
-         f"{test_last_eval['loss']:.4f}"],
-        ["Accuracy",
-         f"{train_last_eval['accuracy']*100:.2f}%",
-         f"{valid_last_eval['accuracy']*100:.2f}%",
-         f"{test_last_eval['accuracy']*100:.2f}%"],
-        ["Balanced Acc",
-         f"{train_last_eval['balanced_accuracy']*100:.2f}%",
-         f"{valid_last_eval['balanced_accuracy']*100:.2f}%",
-         f"{test_last_eval['balanced_accuracy']*100:.2f}%"],
-        ["F1 Score",
-         f"{train_last_eval['f1']:.4f}",
-         f"{valid_last_eval['f1']:.4f}",
-         f"{test_last_eval['f1']:.4f}"],
-        ["MCC",
-         f"{train_last_eval['mcc']:.4f}",
-         f"{valid_last_eval['mcc']:.4f}",
-         f"{test_last_eval['mcc']:.4f}"],
-    ]
+    # Build header based on what's being plotted
+    headers = ["Metric"]
+    if plot_train:
+        headers.append("Train")
+    if plot_val:
+        headers.append("Validation")
+    if plot_test:
+        headers.append("Test")
     
+    metrics_table = [headers]
+    metrics_table.append(["-"*15] * len(headers))
+    
+    # Helper function to add metric rows
+    def add_metric_row(metric_name, train_val, valid_val, test_val, format_str="{:.4f}"):
+        row = [metric_name]
+        if plot_train:
+            row.append(format_str.format(train_val))
+        if plot_val:
+            row.append(format_str.format(valid_val))
+        if plot_test:
+            row.append(format_str.format(test_val))
+        metrics_table.append(row)
+    
+    # Add all metrics
+    add_metric_row("Loss",
+                   train_last_eval['loss'],
+                   valid_last_eval['loss'],
+                   test_last_eval['loss'])
+    
+    add_metric_row("Accuracy",
+                   train_last_eval['accuracy']*100,
+                   valid_last_eval['accuracy']*100,
+                   test_last_eval['accuracy']*100,
+                   "{:.2f}%")
+    
+    add_metric_row("Balanced Acc",
+                   train_last_eval['balanced_accuracy']*100,
+                   valid_last_eval['balanced_accuracy']*100,
+                   test_last_eval['balanced_accuracy']*100,
+                   "{:.2f}%")
+    
+    add_metric_row("F1 Score",
+                   train_last_eval['f1'],
+                   valid_last_eval['f1'],
+                   test_last_eval['f1'])
+    
+    add_metric_row("MCC",
+                   train_last_eval['mcc'],
+                   valid_last_eval['mcc'],
+                   test_last_eval['mcc'])
+    
+    add_metric_row("AUC-ROC",
+                   train_last_eval.get('auc', float('nan')),
+                   valid_last_eval.get('auc', float('nan')),
+                   test_last_eval.get('auc', float('nan')))
+    
+    # Print the table
     for row in metrics_table:
-        print(f"{row[0]:<15} {row[1]:>15} {row[2]:>15} {row[3]:>15}")
+        formatted_row = [f"{row[0]:<15}"] + [f"{val:>15}" for val in row[1:]]
+        print("".join(formatted_row))
     
     print("="*80)
-
     
     # ============================================================================
-    # SECTION 3: Visualizations
+    # SECTION 2: Visualizations
     # ============================================================================
     sns.set_style("whitegrid")
-    fig = plt.figure(figsize=(18, 10))
-    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+    
+    # Count how many datasets to plot
+    num_datasets = sum([plot_train, plot_val, plot_test])
+    
+    if num_datasets == 0:
+        print("\nNo datasets selected for plotting.")
+        return
+    
+    # Adjust figure layout - now with more rows for additional metrics
+    fig = plt.figure(figsize=(18, 18))
+    gs = fig.add_gridspec(5, 3, hspace=0.4, wspace=0.3)
     
     # Row 1: Loss and Accuracy curves
     ax1 = fig.add_subplot(gs[0, :2])
-    ax1.plot(train_loss_history, label="Train", marker='o', linewidth=2, markersize=6)
-    ax1.plot(valid_loss_history, label="Valid", marker='s', linewidth=2, markersize=6)
-    ax1.plot(test_loss_history, label="Test", marker='^', linewidth=2, markersize=6)
+    if plot_train:
+        ax1.plot(train_loss_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax1.plot(valid_loss_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax1.plot(test_loss_history, label="Test", marker='^', linewidth=2, markersize=6)
     ax1.set_title("Loss History", fontsize=14, fontweight='bold')
     ax1.set_xlabel("Evaluation Step", fontsize=11)
     ax1.set_ylabel("Loss", fontsize=11)
@@ -458,62 +576,150 @@ def summarize_training(
     ax1.grid(alpha=0.3)
     
     ax2 = fig.add_subplot(gs[0, 2])
-    ax2.plot(train_acc_history, label="Train", marker='o', linewidth=2, markersize=6)
-    ax2.plot(valid_acc_history, label="Valid", marker='s', linewidth=2, markersize=6)
-    ax2.plot(test_acc_history, label="Test", marker='^', linewidth=2, markersize=6)
+    if plot_train:
+        ax2.plot(train_acc_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax2.plot(valid_acc_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax2.plot(test_acc_history, label="Test", marker='^', linewidth=2, markersize=6)
     ax2.set_title("Accuracy History", fontsize=14, fontweight='bold')
     ax2.set_xlabel("Evaluation Step", fontsize=11)
     ax2.set_ylabel("Accuracy", fontsize=11)
     ax2.legend(fontsize=10)
     ax2.grid(alpha=0.3)
     
-    # Row 2: Confusion Matrices
-    datasets = [
-        (train_last_eval, "Train", gs[1, 0]),
-        (valid_last_eval, "Valid", gs[1, 1]),
-        (test_last_eval, "Test", gs[1, 2])
-    ]
+    # Row 2: Balanced Accuracy, F1 Score, and MCC curves
+    ax3 = fig.add_subplot(gs[1, 0])
+    if plot_train:
+        ax3.plot(train_balanced_acc_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax3.plot(valid_balanced_acc_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax3.plot(test_balanced_acc_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax3.set_title("Balanced Accuracy History", fontsize=14, fontweight='bold')
+    ax3.set_xlabel("Evaluation Step", fontsize=11)
+    ax3.set_ylabel("Balanced Accuracy", fontsize=11)
+    ax3.legend(fontsize=10)
+    ax3.grid(alpha=0.3)
     
-    for eval_dict, name, grid_pos in datasets:
+    ax4 = fig.add_subplot(gs[1, 1])
+    if plot_train:
+        ax4.plot(train_f1_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax4.plot(valid_f1_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax4.plot(test_f1_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax4.set_title("F1 Score History", fontsize=14, fontweight='bold')
+    ax4.set_xlabel("Evaluation Step", fontsize=11)
+    ax4.set_ylabel("F1 Score", fontsize=11)
+    ax4.legend(fontsize=10)
+    ax4.grid(alpha=0.3)
+    
+    ax5 = fig.add_subplot(gs[1, 2])
+    if plot_train:
+        ax5.plot(train_mcc_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax5.plot(valid_mcc_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax5.plot(test_mcc_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax5.set_title("MCC History", fontsize=14, fontweight='bold')
+    ax5.set_xlabel("Evaluation Step", fontsize=11)
+    ax5.set_ylabel("Matthews Correlation Coefficient", fontsize=11)
+    ax5.legend(fontsize=10)
+    ax5.grid(alpha=0.3)
+    ax5.axhline(y=0, color='gray', linestyle='--', alpha=0.5)  # Reference line at 0
+    
+    # Row 3: AUC-ROC curve
+    ax6 = fig.add_subplot(gs[2, :])
+    if plot_train:
+        ax6.plot(train_auc_history, label="Train", marker='o', linewidth=2, markersize=6)
+    if plot_val:
+        ax6.plot(valid_auc_history, label="Valid", marker='s', linewidth=2, markersize=6)
+    if plot_test:
+        ax6.plot(test_auc_history, label="Test", marker='^', linewidth=2, markersize=6)
+    ax6.set_title("AUC-ROC History", fontsize=14, fontweight='bold')
+    ax6.set_xlabel("Evaluation Step", fontsize=11)
+    ax6.set_ylabel("AUC-ROC Score", fontsize=11)
+    ax6.legend(fontsize=10)
+    ax6.grid(alpha=0.3)
+    ax6.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)  # Random classifier baseline
+    ax6.set_ylim([0, 1.05])
+    
+    # Row 4: Confusion Matrices (only for selected datasets)
+    datasets_to_plot = []
+    grid_positions = [gs[3, 0], gs[3, 1], gs[3, 2]]
+    position_idx = 0
+    
+    if plot_train:
+        datasets_to_plot.append((train_last_eval, "Train", grid_positions[position_idx]))
+        position_idx += 1
+    if plot_val:
+        datasets_to_plot.append((valid_last_eval, "Valid", grid_positions[position_idx]))
+        position_idx += 1
+    if plot_test:
+        datasets_to_plot.append((test_last_eval, "Test", grid_positions[position_idx]))
+        position_idx += 1
+    
+    for eval_dict, name, grid_pos in datasets_to_plot:
         ax = fig.add_subplot(grid_pos)
         cm = confusion_matrix(
             eval_dict['labels'].numpy(),
             eval_dict['pred_labels'].numpy()
         )
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, 
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
                     cbar=False, square=True, annot_kws={"size": 12})
         ax.set_title(f'{name} Confusion Matrix', fontsize=12, fontweight='bold')
         ax.set_xlabel('Predicted', fontsize=10)
         ax.set_ylabel('Actual', fontsize=10)
     
-    # Row 3: Metrics comparison bar chart
-    ax7 = fig.add_subplot(gs[2, :])
-    metrics_names = ['Accuracy', 'Balanced Accuracy', 'F1 Score', 'MCC']
-    train_metrics = [
-        train_last_eval['accuracy'],
-        train_last_eval['balanced_accuracy'],
-        train_last_eval['f1'],
-        (train_last_eval['mcc'] + 1) / 2  # Normalize MCC to [0,1] for visualization
-    ]
-    valid_metrics = [
-        valid_last_eval['accuracy'],
-        valid_last_eval['balanced_accuracy'],
-        valid_last_eval['f1'],
-        (valid_last_eval['mcc'] + 1) / 2
-    ]
-    test_metrics = [
-        test_last_eval['accuracy'],
-        test_last_eval['balanced_accuracy'],
-        test_last_eval['f1'],
-        (test_last_eval['mcc'] + 1) / 2
-    ]
+    # Row 5: Metrics comparison bar chart
+    ax7 = fig.add_subplot(gs[4, :])
+    metrics_names = ['Accuracy', 'Balanced Accuracy', 'F1 Score', 'MCC', 'AUC-ROC']
     
+    # Prepare data based on what's being plotted
+    datasets_metrics = []
+    labels = []
+    
+    if plot_train:
+        train_metrics = [
+            train_last_eval['accuracy'],
+            train_last_eval['balanced_accuracy'],
+            train_last_eval['f1'],
+            (train_last_eval['mcc'] + 1) / 2,  # Normalize MCC to [0,1] for visualization
+            train_last_eval.get('auc', 0.5)
+        ]
+        datasets_metrics.append(train_metrics)
+        labels.append('Train')
+    
+    if plot_val:
+        valid_metrics = [
+            valid_last_eval['accuracy'],
+            valid_last_eval['balanced_accuracy'],
+            valid_last_eval['f1'],
+            (valid_last_eval['mcc'] + 1) / 2,
+            valid_last_eval.get('auc', 0.5)
+        ]
+        datasets_metrics.append(valid_metrics)
+        labels.append('Valid')
+    
+    if plot_test:
+        test_metrics = [
+            test_last_eval['accuracy'],
+            test_last_eval['balanced_accuracy'],
+            test_last_eval['f1'],
+            (test_last_eval['mcc'] + 1) / 2,
+            test_last_eval.get('auc', 0.5)
+        ]
+        datasets_metrics.append(test_metrics)
+        labels.append('Test')
+    
+    # Plot bars
     x = np.arange(len(metrics_names))
-    width = 0.25
+    width = 0.8 / num_datasets  # Adjust width based on number of datasets
     
-    ax7.bar(x - width, train_metrics, width, label='Train', alpha=0.8)
-    ax7.bar(x, valid_metrics, width, label='Valid', alpha=0.8)
-    ax7.bar(x + width, test_metrics, width, label='Test', alpha=0.8)
+    for i, (metrics, label) in enumerate(zip(datasets_metrics, labels)):
+        offset = (i - num_datasets/2 + 0.5) * width
+        ax7.bar(x + offset, metrics, width, label=label, alpha=0.8)
     
     ax7.set_xlabel('Metrics', fontsize=11, fontweight='bold')
     ax7.set_ylabel('Score', fontsize=11, fontweight='bold')
@@ -534,16 +740,106 @@ def summarize_training(
     plt.show()
     
     # ============================================================================
-    # SECTION 4: Detailed Classification Report (Test Set)
+    # SECTION 3: Detailed Classification Reports
     # ============================================================================
-    print("\n" + "="*80)
-    print(" "*25 + "TEST SET CLASSIFICATION REPORT")
-    print("="*80)
-    print(classification_report(
-        test_last_eval['labels'].numpy(),
-        test_last_eval['pred_labels'].numpy(),
-        target_names=['Class 0', 'Class 1'],
-        digits=4
-    ))
-    print("="*80 + "\n")
+    if plot_test:
+        print("\n" + "="*80)
+        print(" "*25 + "TEST SET CLASSIFICATION REPORT")
+        print("="*80)
+        
+        # Get unique classes actually present in test set
+        unique_test_classes = np.unique(np.concatenate([
+            test_last_eval['labels'].numpy(),
+            test_last_eval['pred_labels'].numpy()
+        ]))
+        
+        print(classification_report(
+            test_last_eval['labels'].numpy(),
+            test_last_eval['pred_labels'].numpy(),
+            labels=unique_test_classes,  # Only use classes that are present
+            target_names=[f'Class {i}' for i in unique_test_classes],
+            digits=4,
+            zero_division=0
+        ))
+        print("="*80 + "\n")
 
+    if plot_val:
+        print("\n" + "="*80)
+        print(" "*25 + "VALIDATION SET CLASSIFICATION REPORT")
+        print("="*80)
+        
+        # Get unique classes actually present in validation set
+        unique_valid_classes = np.unique(np.concatenate([
+            valid_last_eval['labels'].numpy(),
+            valid_last_eval['pred_labels'].numpy()
+        ]))
+        
+        print(classification_report(
+            valid_last_eval['labels'].numpy(),
+            valid_last_eval['pred_labels'].numpy(),
+            labels=unique_valid_classes,
+            target_names=[f'Class {i}' for i in unique_valid_classes],
+            digits=4,
+            zero_division=0
+        ))
+        print("="*80 + "\n")
+
+    if plot_train:
+        print("\n" + "="*80)
+        print(" "*25 + "TRAIN SET CLASSIFICATION REPORT")
+        print("="*80)
+        
+        # Get unique classes actually present in training set
+        unique_train_classes = np.unique(np.concatenate([
+            train_last_eval['labels'].numpy(),
+            train_last_eval['pred_labels'].numpy()
+        ]))
+        
+        print(classification_report(
+            train_last_eval['labels'].numpy(),
+            train_last_eval['pred_labels'].numpy(),
+            labels=unique_train_classes,
+            target_names=[f'Class {i}' for i in unique_train_classes],
+            digits=4,
+            zero_division=0
+        ))
+        print("="*80 + "\n")
+
+
+def get_uniprot_info(uniprot_id):
+    """Fetch gene name and function from UniProt"""
+    url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.txt"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            lines = response.text.split('\n')
+            gene_name = ""
+            function = ""
+            
+            # Extract gene name
+            for line in lines:
+                if line.startswith('GN   Name='):
+                    gene_name = line.split('Name=')[1].split(';')[0].strip()
+                    break
+            
+            # Extract function (first CC line with "FUNCTION:")
+            in_function = False
+            for line in lines:
+                if 'FUNCTION:' in line:
+                    in_function = True
+                    function = line.split('FUNCTION:')[1].strip()
+                elif in_function:
+                    if line.startswith('CC   '):
+                        function += " " + line[5:].strip()
+                    else:
+                        break
+            
+            # Truncate function to ~150 chars
+            if len(function) > 150:
+                function = function[:147] + "..."
+            
+            return gene_name, function
+        else:
+            return "N/A", "Failed to fetch"
+    except Exception as e:
+        return "N/A", f"Error: {str(e)}"

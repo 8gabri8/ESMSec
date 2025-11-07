@@ -273,7 +273,7 @@ class MeanPoolMSCNNHead(nn.Module):
 
 class GatingTransformerHead(nn.Module):
 
-    def __init__(self, in_features_dim=480, num_heads=8, dropout=0.3):
+    def __init__(self, in_features_dim=480, num_heads=8, dropout=0.3, num_classes=2):
         super(GatingTransformerHead, self).__init__()
 
         self.in_features_dim = in_features_dim
@@ -301,7 +301,7 @@ class GatingTransformerHead(nn.Module):
             nn.Linear(512, 128),
             nn.ReLU(),
             nn.Dropout(dropout * 0.5),
-            nn.Linear(128, 2)  # binary classification
+            nn.Linear(128, num_classes) 
         )
 
     def forward(self, x, attention_mask=None, return_embs=False):
@@ -349,7 +349,7 @@ class GatingTransformerHead(nn.Module):
 
 class AttentionClassificationHead(nn.Module):
 
-    def __init__(self, in_features_dim = 480, num_heads = 8, dropout=0.3):
+    def __init__(self, in_features_dim = 480, num_heads = 8, dropout=0.3, num_classes=2):
         super(AttentionClassificationHead, self).__init__() 
 
         self.in_features_dim = in_features_dim
@@ -386,7 +386,7 @@ class AttentionClassificationHead(nn.Module):
             nn.ReLU(),
             nn.Linear(628, 32),
             nn.ReLU(),
-            nn.Linear(32, 2), # 2 for binary classication
+            nn.Linear(32, num_classes), # 2 for binary classication
         )
     
 
@@ -454,11 +454,11 @@ class LogisticRegressionHead(nn.Module):
     Simple logistic regression head: just a single linear layer.
     No hidden layers, no non-linearities - the simplest possible classifier.
     """
-    def __init__(self, in_features_dim=320):
+    def __init__(self, in_features_dim=320, num_classes=2):
         super(LogisticRegressionHead, self).__init__()
         
         # Single linear layer: input -> 2 classes
-        self.classifier = nn.Linear(in_features_dim, 2)
+        self.classifier = nn.Linear(in_features_dim, num_classes)
     
     def forward(self, x, return_embs=False):
         """
@@ -479,9 +479,6 @@ class LogisticRegressionHead(nn.Module):
         
         return logits
     
-
-import torch
-import torch.nn as nn
 
 class MLPHead(nn.Module):
     def __init__(self, in_features_dim=480, num_classes=2, dropout_prob=0.5):
@@ -528,7 +525,14 @@ class MLPHead(nn.Module):
 # Model = ESM + ClassificationHead
 class EsmDeepSec(nn.Module):
 
-    def __init__(self, esm_model=None, type_head="attention", type_emb_for_classification="contextualized_embs", from_precomputed_embs=False, precomputed_embs_dim=None):
+    def __init__(
+            self, esm_model=None, 
+            type_head="attention", 
+            type_emb_for_classification="contextualized_embs", 
+            from_precomputed_embs=False, 
+            precomputed_embs_dim=None,
+            num_classes=2,
+        ):
         super(EsmDeepSec, self).__init__()
 
         # # Add validation after initializing in_features_dim
@@ -552,6 +556,7 @@ class EsmDeepSec(nn.Module):
         types_head = ["attention", "MLP", "CNN", "LR", "gating_transformer"]
         assert type_head in types_head, f"type_head must be one of {types_head}"
         self.type_head = type_head
+        self.num_classes=num_classes
 
         self.from_precomputed_embs = from_precomputed_embs
 
@@ -590,15 +595,15 @@ class EsmDeepSec(nn.Module):
 
         # Classification Head
         if type_head == "attention":
-            self.class_head = AttentionClassificationHead(in_features_dim=self.in_features_dim)
+            self.class_head = AttentionClassificationHead(in_features_dim=self.in_features_dim, num_classes=self.num_classes)
         elif type_head == "MLP":
-            self.class_head = MLPHead(in_features_dim=self.in_features_dim)
+            self.class_head = MLPHead(in_features_dim=self.in_features_dim, num_classes=self.num_classes)
         elif type_head == "LR":
-            self.class_head = LogisticRegressionHead(in_features_dim=self.in_features_dim)
+            self.class_head = LogisticRegressionHead(in_features_dim=self.in_features_dim, num_classes=self.num_classes)
         elif type_head == "CNN":
-            self.class_head = MeanPoolMSCNNHead(in_features_dim=self.in_features_dim)    
+            self.class_head = MeanPoolMSCNNHead(in_features_dim=self.in_features_dim, num_classes=self.num_classes)  
         elif type_head == "gating_transformer":
-            self.class_head = GatingTransformerHead(in_features_dim=self.in_features_dim)       
+            self.class_head = GatingTransformerHead(in_features_dim=self.in_features_dim, num_classes=self.num_classes)       
 
 
     def forward(self, input_ids=None, attention_mask=None, return_embs=False, precomputed_embs=None):

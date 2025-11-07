@@ -7,8 +7,8 @@ import torch
 from scipy.ndimage import gaussian_filter1d
 
 
-import dataset as my_dataset
-import my_functions as mf
+from . import dataset as my_dataset
+from . import my_functions as mf
 
 
 
