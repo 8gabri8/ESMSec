@@ -573,7 +573,7 @@ def multi_aa_scanning_final(model,
 
 def plot_multi_aa_scan(scan_results, sigma=3, threshold=True, figsize=(20, 6), 
                        highlight_residues=True, top_n=10, show_sequence=True,
-                       style='darkgrid', palette='RdBu_r', show_per_aa=False):
+                       style='darkgrid', palette='RdBu_r', show_per_aa=False, plot_range=None):
     """
     Plot the Δp values across the protein sequence from multi-AA scanning results
     with optional smoothing, threshold lines, and residue highlighting.
@@ -727,10 +727,13 @@ def plot_multi_aa_scan(scan_results, sigma=3, threshold=True, figsize=(20, 6),
     
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.9, 
                 edgecolor='black', linewidth=1.5)
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+    ax.text(0.98, 0.02, stats_text, transform=ax.transAxes, 
             fontsize=10, verticalalignment='top', bbox=props,
             family='monospace')
     
+    if plot_range is not None:
+        plt.xlim(plot_range[0], plot_range[1])  # Show only first 50 residues
+
     plt.tight_layout()
     plt.show()
     

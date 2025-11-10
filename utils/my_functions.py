@@ -286,11 +286,13 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
 
     # learning rate schefuler
     #LR_scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # step_size=N → the LR changes after step() has been called N times
-    # LR_scheduler = lr_scheduler.CosineAnnealingLR(
-    #     optimizer, 
-    #     T_max=num_epochs, # Decay over the entire training duration
-    #     eta_min=1e-7,          # Don't go below this LR
-    # )
+
+    LR_scheduler = lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=num_epochs, # Decay over the entire training duration
+        eta_min=1e-7,          # Don't go below this LR
+    )
+
     # LR_scheduler = ReduceLROnPlateau(
     #     optimizer, 
     #     mode='min',           # Change to 'min' since we are tracking loss
@@ -301,12 +303,13 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     #     threshold=5e-3,       # minimum change in the monitored quantity to qualify as an "improvement." If the loss improvement is smaller than this, it's considered a plateau.
     #     threshold_mode='abs'  # Changed from 'rel' to 'abs' for fixed minimum improvement
     # )
-    LR_scheduler = lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, 
-        T_0=20,          # Number of epochs for the first restart cycle
-        T_mult=2,         # Multiply T_0 by 2 after each restart (makes cycles grow)
-        eta_min=min_lr    # The minimum LR to anneal down to
-    )
+
+    # LR_scheduler = lr_scheduler.CosineAnnealingWarmRestarts(
+    #     optimizer, 
+    #     T_0=5,          # Number of epochs for the first restart cycle
+    #     T_mult=2,         # Multiply T_0 by 2 after each restart (makes cycles grow)
+    #     eta_min=min_lr    # The minimum LR to anneal down to
+    # )
 
     # Set model to training mode
     net.train()
