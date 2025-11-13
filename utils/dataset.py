@@ -99,7 +99,10 @@ def create_uniprot_embs(
     config, 
     cache_data, 
     num_samples, 
-    emb_dim
+    emb_dim,
+    save_embs_path=None,
+    save_names_path=None,
+    batch_size=16,
 ):
     esm_model.eval()
 
@@ -109,7 +112,7 @@ def create_uniprot_embs(
     # Create dataloader for batched processing
     dataloader = create_dataloader(
         cache_data,
-        batch_size=config.get("BATCH_SIZE", 32),
+        batch_size=batch_size,
         shuffle=False,
     )
 
@@ -154,25 +157,27 @@ def create_uniprot_embs(
     print(f"Embeddings shape: {all_embeddings.shape}")
 
     # Save embeddings with safetensors
-    safetensors_path = config["PRECOMPUTED_EMBS_PATH"]
-    save_file(
-        {"embedding": all_embeddings},
-        safetensors_path
-    )
+    if save_embs_path is not None:
+        save_file(
+            {"embedding": all_embeddings},
+            save_embs_path
+        )
 
     # Save protein names as JSON
-    names_path = config["PRECOMPUTED_EMBS_PATH_PROTEIN_NAMES"]
-    with open(names_path, 'w', encoding='utf-8') as f:
-        json.dump(protein_names, f, ensure_ascii=False)
+    if save_names_path is not None:
+        with open(save_names_path, 'w', encoding='utf-8') as f:
+            json.dump(protein_names, f, ensure_ascii=False)
 
     print(f"✓ Saved {len(protein_names)} embeddings")
-    print(f"  Embeddings: {safetensors_path}")
-    print(f"  Names: {names_path}")
+    print(f"  Embeddings: {save_embs_path}")
+    print(f"  Names: {save_names_path}")
 
     return {
-        'embeddings_path': safetensors_path,
-        'names_path': names_path,
-        'num_proteins': len(protein_names)
+        'embeddings_path': save_embs_path,
+        'names_path': save_names_path,
+        'num_proteins': len(protein_names),
+        "embs":  all_embeddings,
+        "protein_names": protein_names
     }
 
 

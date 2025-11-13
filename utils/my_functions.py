@@ -18,6 +18,16 @@ import yaml
 import os
 import requests
 
+def tensor_to_python(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.item() if obj.numel() == 1 else obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: tensor_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [tensor_to_python(v) for v in obj]
+    else:
+        return obj
+
 def set_all_seeds(seed_value=42):
     """
     Sets seeds for reproducibility across random, numpy, and PyTorch (if available).
@@ -290,7 +300,7 @@ def train(net, train_dl, valid_dl, test_dl, loss_fn, config, from_precomputed_em
     LR_scheduler = lr_scheduler.CosineAnnealingLR(
         optimizer, 
         T_max=num_epochs, # Decay over the entire training duration
-        eta_min=1e-7,          # Don't go below this LR
+        eta_min=1e-5,          # Don't go below this LR
     )
 
     # LR_scheduler = ReduceLROnPlateau(
@@ -451,7 +461,8 @@ def summarize_results(
     num_classes=2,
     plot_train=True,
     plot_val=False,
-    plot_test=True
+    plot_test=True,
+    save_path=None
 ):
     """
     Comprehensive summary of training with multiple metrics, visualizations, and confusion matrices.
@@ -740,8 +751,12 @@ def summarize_results(
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
     
     plt.suptitle('Training Summary Dashboard', fontsize=16, fontweight='bold', y=0.995)
-    plt.show()
-    
+    if save_path is not None:
+        fig.savefig(save_path, format=save_path.split('.')[-1], bbox_inches='tight')
+        print(f"\n✅ Figure saved to: {save_path}")
+
+    plt.show()    
+
     # ============================================================================
     # SECTION 3: Detailed Classification Reports
     # ============================================================================
@@ -808,6 +823,8 @@ def summarize_results(
         ))
         print("="*80 + "\n")
 
+    return fig
+
 
 def get_uniprot_info(uniprot_id):
     """Fetch gene name and function from UniProt"""
@@ -846,3 +863,5 @@ def get_uniprot_info(uniprot_id):
             return "N/A", "Failed to fetch"
     except Exception as e:
         return "N/A", f"Error: {str(e)}"
+    
+    

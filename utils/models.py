@@ -531,6 +531,7 @@ class EsmDeepSec(nn.Module):
             type_emb_for_classification="contextualized_embs", 
             from_precomputed_embs=False, 
             precomputed_embs_dim=None,
+            loss_fn=None,
             num_classes=2,
         ):
         super(EsmDeepSec, self).__init__()
@@ -562,6 +563,11 @@ class EsmDeepSec(nn.Module):
 
         self.esm_model = esm_model  
         self.ESM_hidden_dim = precomputed_embs_dim
+
+        if loss_fn is None:
+            self.loss_fn = nn.CrossEntropyLoss()
+        else:
+            self.loss_fn=loss_fn
 
         # Checj if ESM is needed
         if not self.from_precomputed_embs:

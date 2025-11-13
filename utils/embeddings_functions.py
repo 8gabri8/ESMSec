@@ -140,7 +140,7 @@ def compute_umap_tensors(embeddings_dict, n_neighbors=15, min_dist=0.1, random_s
 
 
 def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
-                         class_palette=None, corr_palette=None, point_size=5):
+                         class_palette=None, corr_palette=None, point_size=5, save_path=None):
     """
     Plot UMAP embeddings for multiple embedding types with True/Pred/Correct info.
 
@@ -228,6 +228,11 @@ def plot_umap_embeddings(umap_embs, names, labels, preds, embedding_keys=None,
     fig.legend(handles=corr_patches, title='Prediction correctness', loc='upper right', bbox_to_anchor=(0.98, 0.65))
 
     plt.tight_layout(rect=[0, 0, 0.95, 1])
+
+    if save_path is not None:
+        fig.savefig(save_path, format=save_path.split('.')[-1], bbox_inches='tight')
+        print(f"\n✅ Embedding plot saved to: {save_path}")
+
     plt.show()
 
     return dfs
@@ -284,7 +289,7 @@ def plot_umap_clusters(df, umap1_col='UMAP1', umap2_col='UMAP2',
 
 
 def plot_embeddings(adata, basis, color, title=None, size=10, palette=None, 
-                   groups=None, legend_loc=None, ncols=None, figsize=None, **kwargs):
+                   groups=None, legend_loc=None, ncols=None, figsize=None, save_path=None, **kwargs):
     """
     Plot multiple embeddings in a single figure.
     
@@ -404,4 +409,9 @@ def plot_embeddings(adata, basis, color, title=None, size=10, palette=None,
         axes[j].axis('off')
     
     plt.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, format=save_path.split('.')[-1], bbox_inches='tight')
+        print(f"\n✅ Embedding plot saved to: {save_path}")
+
     return fig, axes
