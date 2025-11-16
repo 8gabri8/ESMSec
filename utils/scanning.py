@@ -203,7 +203,8 @@ def plot_multi_aa_scan(scan_results,
                               figsize=(30, 6),
                               palette='Tab10', 
                               ax=None, 
-                              sub_aa_for_mean=None
+                              sub_aa_for_mean=None,
+                              ylim=False
                               ):
     """
     Plot mutation scanning results.
@@ -306,8 +307,9 @@ def plot_multi_aa_scan(scan_results,
                                    alpha=0.7, 
                                    edgecolor='darkred'))
     
-    # Set y-limits
-    ax.set_ylim(-3 * std, 3 * std)
+    # Set y-limit:
+    if ylim:
+        ax.set_ylim(-3 * std, 3 * std)
     
     # Set x-limits if provided
     if xlim is not None:

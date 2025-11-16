@@ -5,9 +5,12 @@ data_paths:
   neftel_data_folder: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/scrna/Neftel_at_al/Data_Neftel2019_Brain/10X
   metaprograms_3CA: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/scrna/Neftel_at_al/meta_programs_2025-01-29.xlsx
   human_proteome_uniprot: /home/gdallagl/myworkdir/ESMSec/data/UniProt/human_proteome.tsv
+  uniprot_cellular_locations: /home/gdallagl/myworkdir/ESMSec/data/UniProt/uniprotkb_reviewed_cellular_locations.tsv
+  uniprot_cellular_locations_names: /home/gdallagl/myworkdir/ESMSec/data/UniProt/unirpot_all_cell_locations_names.tsv
   uniprot_mapping_id: /home/gdallagl/myworkdir/ESMSec/data/UniRef50/HUMAN_9606_idmapping.dat
   interprot_domains: /home/gdallagl/myworkdir/ESMSec/data/UniProt/uniprot_InterProt_domains.tsv
   uniref_df_path: /home/gdallagl/myworkdir/ESMSec/data/UniRef50/uniref_df_processed.csv
+  CD-CODE_condensates_path: /home/gdallagl/myworkdir/ESMSec/data/UniProt/protein_in_condensates_CD-CODE.tsv
 
   positive_genesets: /home/gdallagl/myworkdir/ESMSec/data/cell_cycle/datasets/cc_positive_genesets.csv
   
@@ -19,13 +22,16 @@ data_paths:
 dataset_creation:
   min_freq_to_be_positive_gene: 3
   percentage_number_positive_genesets: 0.025
-  use_only_reviewed_proteins: True
-  sample_positive_genes: False
-  sample_negative_genes: False
-  number_positive_genes_to_sample_per_cluster: 2
+
+  #use_only_reviewed_proteins: True
+  number_positive_proteins_to_sample_per_cluster: 2
   mult_factor_negative_class: 3
   min_length_negative_protein: 100
   max_length_negative_protein: 1000
+  
+  sample_positive_genes: False
+  sample_negative_genes: False
+
 
 
 random_seed: 42
